@@ -58,12 +58,12 @@ export const PLAN_LINES: Entity<'planLines'> = {
 
 export const RECURRING: Entity<'recurringPlans'> = {
   key: 'recurringPlans', table: 'recurring_plans',
-  columns: 'id, name, envelope_id, expected_amount_minor, currency, amount_mode, freq, by_month_day, by_day, by_month, anchor_date, assignee_id, fund_id, debt_id, is_active',
+  columns: 'id, name, envelope_id, expected_amount_minor, currency, amount_mode, freq, bymonthday, byday, bymonth, anchor_date, assignee_id, fund_id, debt_id, is_active',
   toRow: (p: RecurringPlan, h) => ({
     id: p.id, household_id: h, name: p.name, envelope_id: p.envelopeId,
     expected_amount_minor: p.expectedMinor, currency: p.currency,
     amount_mode: p.amountMode, freq: p.freq,
-    by_month_day: p.byMonthDay ?? null, by_day: p.byDay ?? null, by_month: p.byMonth ?? null,
+    bymonthday: p.byMonthDay ?? null, byday: p.byDay ?? null, bymonth: p.byMonth ?? null,
     anchor_date: p.anchorDate, assignee_id: p.assigneeId ?? null,
     fund_id: p.fundId ?? null, debt_id: p.debtId ?? null, is_active: p.active,
   }),
@@ -71,7 +71,7 @@ export const RECURRING: Entity<'recurringPlans'> = {
     id: r.id, name: r.name, envelopeId: r.envelope_id,
     expectedMinor: r.expected_amount_minor, currency: r.currency,
     amountMode: r.amount_mode, freq: r.freq,
-    byMonthDay: nn(r.by_month_day), byDay: nn(r.by_day), byMonth: nn(r.by_month),
+    byMonthDay: nn(r.bymonthday), byDay: nn(r.byday), byMonth: nn(r.bymonth),
     anchorDate: String(r.anchor_date).slice(0, 10), assigneeId: nn(r.assignee_id),
     fundId: nn(r.fund_id), debtId: nn(r.debt_id), active: r.is_active,
   }),
@@ -119,19 +119,19 @@ export const ENTRIES: Entity<'entries'> = {
 
 export const FUNDS: Entity<'funds'> = {
   key: 'funds', table: 'funds',
-  columns: 'id, name, kind, currency, target_amount_minor, due_date, monthly_fixed_minor, buffer_pct, linked_plan_id, priority, is_archived',
+  columns: 'id, name, kind, currency, target_amount_minor, due_date, monthly_fixed_minor, buffer_pct, linked_recurring_plan_id, priority, is_archived',
   toRow: (f: Fund, h) => ({
     id: f.id, household_id: h, name: f.name, kind: f.kind, currency: f.currency,
     target_amount_minor: f.targetMinor ?? null, due_date: f.dueDate ?? null,
     monthly_fixed_minor: f.monthlyFixedMinor ?? null, buffer_pct: f.bufferPct ?? 0,
-    linked_plan_id: f.linkedPlanId ?? null, priority: f.priority, is_archived: !!f.archived,
+    linked_recurring_plan_id: f.linkedPlanId ?? null, priority: f.priority, is_archived: !!f.archived,
   }),
   fromRow: (r): Fund => ({
     id: r.id, name: r.name, kind: r.kind, currency: r.currency,
     targetMinor: nn(r.target_amount_minor),
     dueDate: r.due_date ? String(r.due_date).slice(0, 10) : undefined,
     monthlyFixedMinor: nn(r.monthly_fixed_minor), bufferPct: nn(r.buffer_pct),
-    linkedPlanId: nn(r.linked_plan_id), priority: r.priority,
+    linkedPlanId: nn(r.linked_recurring_plan_id), priority: r.priority,
     archived: r.is_archived || undefined,
   }),
 }
@@ -157,18 +157,18 @@ export const DEBTS: Entity<'debts'> = {
 
 export const TEMPLATES: Entity<'taskTemplates'> = {
   key: 'taskTemplates', table: 'task_templates',
-  columns: 'id, title, area, effort, schedule_kind, freq, by_day, by_month_day, interval_days, last_completed_at, rotation, default_assignee_id, is_active',
+  columns: 'id, title, area, effort, schedule_kind, freq, byday, bymonthday, interval_days, last_completed_at, rotation, default_assignee_id, is_active',
   toRow: (t: TaskTemplate, h) => ({
     id: t.id, household_id: h, title: t.title, area: t.area ?? null, effort: t.effort,
-    schedule_kind: t.scheduleKind, freq: t.freq ?? null, by_day: t.byDay ?? null,
-    by_month_day: t.byMonthDay ?? null, interval_days: t.intervalDays ?? null,
+    schedule_kind: t.scheduleKind, freq: t.freq ?? null, byday: t.byDay ?? null,
+    bymonthday: t.byMonthDay ?? null, interval_days: t.intervalDays ?? null,
     last_completed_at: t.lastCompletedAt ?? null, rotation: t.rotation,
     default_assignee_id: t.defaultAssigneeId ?? null, is_active: t.active,
   }),
   fromRow: (r): TaskTemplate => ({
     id: r.id, title: r.title, area: nn(r.area), effort: r.effort,
-    scheduleKind: r.schedule_kind, freq: nn(r.freq), byDay: nn(r.by_day),
-    byMonthDay: nn(r.by_month_day), intervalDays: nn(r.interval_days),
+    scheduleKind: r.schedule_kind, freq: nn(r.freq), byDay: nn(r.byday),
+    byMonthDay: nn(r.bymonthday), intervalDays: nn(r.interval_days),
     lastCompletedAt: nn(r.last_completed_at), rotation: r.rotation,
     defaultAssigneeId: nn(r.default_assignee_id), active: r.is_active,
   }),

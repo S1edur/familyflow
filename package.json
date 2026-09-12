@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview --host"
+    "build": "node scripts/check-columns.mjs && tsc -b && vite build",
+    "preview": "vite preview --host",
+    "check:sql": "node scripts/check-columns.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
