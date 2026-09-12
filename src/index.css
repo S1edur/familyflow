@@ -3,21 +3,38 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --c-bg:#F4F6F5; --c-surface:#FFFFFF; --c-surface2:#EAEEEC; --c-raise:#FFFFFF;
+  /* Чотири рівні поверхні замість двох: фон → поверхня → піднята → ховер. */
+  --c-bg:#F2F5F4; --c-surface:#FFFFFF; --c-surface2:#EAEEEC; --c-raise:#FFFFFF;
+  --c-hover:#E2E8E6;
   --c-ink:#121917; --c-muted:#5B6866; --c-faint:#8A9794;
-  --c-line:#DCE3E1; --c-line2:#C4CFCC;
-  --c-accent:#0F6B5C; --c-accent-soft:#DDEBE7; --c-accent-ink:#0B4F44;
-  --c-warn:#8F5514; --c-warn-soft:#F6EADA;
-  --c-stop:#8C2F2A; --c-stop-soft:#F6E1DF;
+
+  /* Межі виводимо з колірного тексту, а не фіксованим сірим: так вони самі
+     тримають однаковий контраст у світлій і темній темі. */
+  --c-line:  color-mix(in srgb, var(--c-ink) 11%, transparent);
+  --c-line2: color-mix(in srgb, var(--c-ink) 20%, transparent);
+
+  --c-accent:#0F6B5C; --c-accent-ink:#0B4F44;
+  --c-accent-soft: color-mix(in srgb, var(--c-accent) 12%, transparent);
+  --c-warn:#8F5514;
+  --c-warn-soft: color-mix(in srgb, var(--c-warn) 13%, transparent);
+  --c-stop:#8C2F2A;
+  --c-stop-soft: color-mix(in srgb, var(--c-stop) 12%, transparent);
   --c-p1:#B3261E; --c-p2:#B06B12; --c-p3:#2F6DA8; --c-p4:#6B7876;
 }
 .dark {
-  --c-bg:#0D1211; --c-surface:#141B1A; --c-surface2:#1B2422; --c-raise:#1B2422;
+  --c-bg:#0A0F0E; --c-surface:#101716; --c-surface2:#18211F; --c-raise:#18211F;
+  --c-hover:#212C29;
   --c-ink:#E5ECEA; --c-muted:#94A29F; --c-faint:#6C7A77;
-  --c-line:#232E2C; --c-line2:#33413E;
-  --c-accent:#5CC3AA; --c-accent-soft:#153029; --c-accent-ink:#8FDCC8;
-  --c-warn:#D9A05B; --c-warn-soft:#2C2318;
-  --c-stop:#E08079; --c-stop-soft:#2F1D1B;
+
+  --c-line:  color-mix(in srgb, var(--c-ink) 10%, transparent);
+  --c-line2: color-mix(in srgb, var(--c-ink) 18%, transparent);
+
+  --c-accent:#5CC3AA; --c-accent-ink:#8FDCC8;
+  --c-accent-soft: color-mix(in srgb, var(--c-accent) 15%, transparent);
+  --c-warn:#D9A05B;
+  --c-warn-soft: color-mix(in srgb, var(--c-warn) 15%, transparent);
+  --c-stop:#E08079;
+  --c-stop-soft: color-mix(in srgb, var(--c-stop) 15%, transparent);
   --c-p1:#E8695F; --c-p2:#D9A05B; --c-p3:#6FA8DC; --c-p4:#8A9794;
 }
 
@@ -37,9 +54,25 @@
   --color-warnSoft: var(--c-warn-soft);
   --color-stop: var(--c-stop);
   --color-stopSoft: var(--c-stop-soft);
+  --color-hover: var(--c-hover);
+
   --font-sans: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Радіусна шкала. Перевизначає стандартну Tailwind, тож наявні rounded-md /
+     rounded-lg / rounded-xl у сторінках підхоплюють нову форму без правок. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
 }
+
+/* Щільний трекінг на великих числах і заголовках — те, що дає числам вагу. */
+.display  { letter-spacing: -0.025em; }
+.tight    { letter-spacing: -0.01em; }
+/* Mono для другорядного: дати, лічильники, технічні підписи. */
+.meta     { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.01em; }
 
 html, body, #root { height: 100%; }
 body {
@@ -49,6 +82,18 @@ body {
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
+/* Крапкова сітка в негативному просторі: маска прибирає її з-під контенту,
+   тож читабельність не страдає. z-index -1, під усім. Опадає до нуля
+   при prefers-reduced-motion не потрібно — вона статична. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+  background-image: radial-gradient(color-mix(in srgb, var(--c-ink) 12%, transparent) 1px, transparent 1.5px);
+  background-size: 16px 16px;
+  background-position: 8px 8px;
+  -webkit-mask-image: radial-gradient(ellipse 55% 65% at 50% 38%, transparent 0, transparent 42%, #000 100%);
+  mask-image: radial-gradient(ellipse 55% 65% at 50% 38%, transparent 0, transparent 42%, #000 100%);
+}
+
 * { -webkit-tap-highlight-color: transparent; }
 .num { font-variant-numeric: tabular-nums; }
 
