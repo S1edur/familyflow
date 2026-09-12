@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/components/QuickAdd.tsx","./src/components/ui.tsx","./src/data/seed.ts","./src/data/store.ts","./src/data/types.ts","./src/lib/dates.ts","./src/lib/money.ts","./src/pages/Debts.tsx","./src/pages/Funds.tsx","./src/pages/Month.tsx","./src/pages/Shopping.tsx","./src/pages/Tasks.tsx","./src/pages/Today.tsx"],"version":"5.9.3"}
