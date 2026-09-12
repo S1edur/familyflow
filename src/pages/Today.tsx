@@ -1,5 +1,5 @@
 import { Avatar, Btn, Empty, Icon, PriorityMark } from '../components/ui'
-import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending } from '../data/store'
+import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending, isIncomeOccurrence } from '../data/store'
 import { money, moneyShort } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
 import { readPinShopping } from '../lib/prefs'
@@ -143,7 +143,7 @@ function BillRow({ o }: { o: Occurrence }) {
       <span className="text-[14px] num text-muted shrink-0">{money(o.expectedMinor, o.currency)}</span>
       <button onClick={() => confirmOccurrence(o.id)}
         className="shrink-0 h-9 px-3 rounded-lg border border-line text-[13px] font-medium hover:bg-surface2 active:opacity-70">
-        Оплачено
+        {isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'}
       </button>
     </li>
   )

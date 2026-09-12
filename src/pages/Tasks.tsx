@@ -9,7 +9,7 @@ import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
   fairness, confirmOccurrence, skipOccurrence, shoppingPending,
   addTaskTemplate, updateTaskTemplate, removeTaskTemplate,
-} from '../data/store'
+ isIncomeOccurrence} from '../data/store'
 import type { DB, ID, Occurrence, Priority, Task, TaskStatus, TaskTemplate } from '../data/types'
 import { money } from '../lib/money'
 import { addDays, relativeDue, shortDate, today } from '../lib/dates'
@@ -444,7 +444,8 @@ function BillRow({ occ, onOpen }: { occ: Occurrence; onOpen: () => void }) {
           {paid ? Icon.check(12) : '—'}
         </span>
       ) : (
-        <button onClick={() => confirmOccurrence(occ.id)} aria-label="Оплачено"
+        <button onClick={() => confirmOccurrence(occ.id)}
+          aria-label={isIncomeOccurrence(db, occ) ? 'Отримано' : 'Оплачено'}
           className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent grid place-items-center transition-colors" />
       )}
 
@@ -506,7 +507,9 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
       ) : (
         <>
           <div className="flex gap-2">
-            <Btn variant="primary" full onClick={() => { confirmOccurrence(occ.id); onClose() }}>Оплачено</Btn>
+            <Btn variant="primary" full onClick={() => { confirmOccurrence(occ.id); onClose() }}>
+              {isIncomeOccurrence(db, occ) ? 'Отримано' : 'Оплачено'}
+            </Btn>
             <Btn onClick={() => { skipOccurrence(occ.id); onClose() }}>Пропустити</Btn>
           </div>
           <div className="text-[12px] text-faint mt-2">

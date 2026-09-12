@@ -46,6 +46,7 @@ export function seed(): DB {
       { envelopeId: 'e11', month: mk(0), plannedMinor:   400_000 },
     ],
     recurringPlans: [
+      { id: 'r0', name: 'Зарплата',      envelopeId: 'e0', expectedMinor: 9_200_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 1,  anchorDate: `${mk(1)}-01`, assigneeId: ME,  active: true },
       { id: 'r1', name: 'Оренда',        envelopeId: 'e1', expectedMinor: 2_500_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 5,  anchorDate: `${y}-01-05`, assigneeId: ME,  active: true },
       { id: 'r2', name: 'Комуналка',     envelopeId: 'e2', expectedMinor:   180_000, currency: 'UAH', amountMode: 'variable', freq: 'monthly', byMonthDay: 20, anchorDate: `${y}-01-20`, assigneeId: HER, active: true },
       { id: 'r3', name: 'Інтернет',      envelopeId: 'e3', expectedMinor:    50_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 10, anchorDate: `${y}-01-10`, assigneeId: ME,  active: true },

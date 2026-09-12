@@ -9,7 +9,7 @@ import {
   confirmOccurrence, skipOccurrence, unconfirmOccurrence, addOccurrence,
   addEnvelope, updateEnvelope, archiveEnvelope, reorderEnvelope,
   addRecurringPlan, updateRecurringPlan, removeRecurringPlan,
-} from '../data/store'
+ isIncomeOccurrence} from '../data/store'
 import { money, parseAmount } from '../lib/money'
 import {
   addMonths, clampDayOfMonth, iso, isoDow, longDate, monthKey, monthTitle, parse,
@@ -188,7 +188,11 @@ export default function Month() {
             {money(sum.free)}
           </div>
           <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3 pt-3 border-t border-line text-[13px]">
-            <Stat label="Дохід" value={money(sum.income)} />
+            <Stat label="Дохід" value={
+              sum.incomeExpected
+                ? <>{money(sum.income + sum.incomeExpected)}<span className="text-faint text-[11.5px]"> очік.</span></>
+                : money(sum.income)
+            } />
             <Stat label="Ще платити" value={money(sum.obligationsLeft)} />
             <Stat label="У фонди" value={money(sum.fundsRequired)} />
             <Stat label="Витрачено" value={money(sum.spentVariable)} />
@@ -622,7 +626,9 @@ function BillRow({ db, o }: { db: DB; o: Occurrence }) {
 
       {!settled && (
         <div className="flex gap-1.5 mt-2">
-          <Btn variant="primary" onClick={() => confirmOccurrence(o.id)}>Оплачено</Btn>
+          <Btn variant="primary" onClick={() => confirmOccurrence(o.id)}>
+            {isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'}
+          </Btn>
           <Btn onClick={() => { setEditing(true); setRaw(String(o.expectedMinor / 100)) }}>Інша сума</Btn>
           <Btn variant="quiet" onClick={() => skipOccurrence(o.id)}>Пропустити</Btn>
         </div>

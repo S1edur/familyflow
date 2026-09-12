@@ -158,6 +158,10 @@ function expandDates(
 ): string[] {
   const out: string[] = []
   const a = parse(anchor)
+  // план не існував до своєї дати прив'язки, тож і платежів до неї бути не може.
+  // Без цього щойно створений план «5 числа» одразу народжує прострочений платіж
+  // за 5 число поточного місяця.
+  const push = (date: string) => { if (date >= anchor) out.push(date) }
 
   if (freq === 'monthly' || freq === 'yearly') {
     const day = byMonthDay ?? a.getDate()
@@ -169,17 +173,17 @@ function expandDates(
       if (ok) {
         const dd = clampDayOfMonth(cur.getFullYear(), m1, day)
         const date = `${cur.getFullYear()}-${String(m1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
-        if (date >= from && date <= to) out.push(date)
+        if (date >= from && date <= to) push(date)
       }
       cur.setMonth(cur.getMonth() + 1)
     }
   } else if (freq === 'weekly') {
     const days = byDay?.length ? byDay : [isoDow(anchor)]
     for (let d = from; d <= to; d = addDays(d, 1)) {
-      if (days.includes(isoDow(d))) out.push(d)
+      if (days.includes(isoDow(d))) push(d)
     }
   } else if (freq === 'daily') {
-    for (let d = from; d <= to; d = addDays(d, 1)) out.push(d)
+    for (let d = from; d <= to; d = addDays(d, 1)) push(d)
   }
   return out
 }
@@ -261,7 +265,17 @@ export function monthSummary(d: DB, month: string) {
     .filter(e => e.kind === 'income' && monthKey(e.occurredOn) === month)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
-  const monthOccurrences = d.occurrences.filter(o => monthKey(o.dueDate) === month)
+  const incomeEnvelopes = new Set(d.envelopes.filter(e => e.kind === 'income').map(e => e.id))
+  // платіж у дохідний конверт — це надходження, а не зобовʼязання:
+  // віднімати його від «вільно» означало б рахувати зарплату витратою
+  const monthOccurrences = d.occurrences
+    .filter(o => monthKey(o.dueDate) === month && !incomeEnvelopes.has(o.envelopeId))
+
+  /** Очікувані, ще не підтверджені надходження цього місяця. */
+  const incomeExpected = d.occurrences
+    .filter(o => monthKey(o.dueDate) === month && incomeEnvelopes.has(o.envelopeId)
+      && (o.status === 'due' || o.status === 'projected'))
+    .reduce((s, o) => s + o.expectedMinor, 0)
 
   const obligationsLeft = monthOccurrences
     .filter(o => o.status === 'due' || o.status === 'projected')
@@ -283,8 +297,11 @@ export function monthSummary(d: DB, month: string) {
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
   const obligationsPaid = obligationsAll - obligationsLeft
-  const free = income - obligationsAll - fundsRequired - spentVariable
-  return { income, obligationsLeft, obligationsPaid, fundsRequired, spentVariable, free }
+  // Симетрія: зобовʼязання рахуються очікуваними (неоплачені теж віднімаються),
+  // тож і дохід має рахуватись очікуваним. Інакше будь-який майбутній місяць
+  // виглядає катастрофою просто тому, що зарплату ще не підтвердили.
+  const free = income + incomeExpected - obligationsAll - fundsRequired - spentVariable
+  return { income, incomeExpected, obligationsLeft, obligationsPaid, fundsRequired, spentVariable, free }
 }
 
 /**
@@ -333,7 +350,10 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
     const entryId = uid()
     d.entries.push({
       id: entryId,
-      kind: plan0?.debtId ? 'debt_payment' : 'expense',
+      // Конверт уже каже, відтік це чи надходження — окреме поле в плані зайве.
+      kind: plan0?.debtId ? 'debt_payment'
+        : d.envelopes.find(e => e.id === o.envelopeId)?.kind === 'income' ? 'income'
+        : 'expense',
       occurredOn: on, amountMinor: amt, currency: o.currency,
       rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
       envelopeId: o.envelopeId, debtId: plan0?.debtId,
@@ -362,6 +382,11 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
       }
     }
   })
+}
+
+/** Платіж у дохідний конверт — це надходження: «Отримано», а не «Оплачено». */
+export function isIncomeOccurrence(d: DB, o: Occurrence): boolean {
+  return d.envelopes.find(e => e.id === o.envelopeId)?.kind === 'income'
 }
 
 export function skipOccurrence(id: ID) {
