@@ -36,6 +36,40 @@ export function mutate(fn: (d: DB) => void) {
   emit()
 }
 
+/**
+ * Підміняє демо-людей справжніми учасниками дому з бази.
+ *
+ * Локальні задачі, витрати й покупки посилаються на сідові m1/m2. Якщо
+ * просто замінити список, усі ці посилання зависнуть і все стане «вільним».
+ * Тому старі ідентифікатори перемапуємо на нові за позицією: «я» стаю собою,
+ * другий стає другим. Демо-дані лишаються зв'язними, поки не переїдуть у базу.
+ */
+export function applyCloudMembers(next: Member[], meId: ID) {
+  if (!next.length) return
+  mutate(d => {
+    const remap = new Map<ID, ID>()
+    const oldMe = d.meId
+    const oldOthers = d.members.filter(m => m.id !== oldMe).map(m => m.id)
+    const newOthers = next.filter(m => m.id !== meId).map(m => m.id)
+
+    remap.set(oldMe, meId)
+    oldOthers.forEach((id, i) => { if (newOthers[i]) remap.set(id, newOthers[i]) })
+
+    const to = (id: ID | undefined) => (id && remap.get(id)) || id
+    for (const t of d.tasks) { t.assigneeId = to(t.assigneeId); t.createdBy = to(t.createdBy)!; t.completedBy = to(t.completedBy) }
+    for (const e of d.entries) e.createdBy = to(e.createdBy)!
+    for (const o of d.occurrences) { o.assigneeId = to(o.assigneeId); o.paidBy = to(o.paidBy) }
+    for (const i of d.shoppingItems) { i.addedBy = to(i.addedBy)!; i.checkedBy = to(i.checkedBy) }
+    for (const tr of d.trips) tr.shoppedBy = to(tr.shoppedBy)!
+    for (const tpl of d.taskTemplates) tpl.defaultAssigneeId = to(tpl.defaultAssigneeId)
+    for (const env of d.envelopes) env.ownerId = to(env.ownerId)
+    for (const p of d.recurringPlans) p.assigneeId = to(p.assigneeId)
+
+    d.members = next
+    d.meId = meId
+  })
+}
+
 export function resetAll() {
   db = materialize(seed())
   emit()

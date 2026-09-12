@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { supabase, isCloudConfigured, cloud } from './supabase'
+import { applyCloudMembers } from './store'
+import type { Member } from './types'
 
 /**
  * Вхід і належність до дому.
@@ -75,6 +77,38 @@ async function loadHousehold() {
   const h = data?.households as unknown as Household | undefined
   household = h ? { id: h.id, name: h.name } : null
   emit()
+  if (household) void loadMembers(household.id)
+}
+
+/** Кольори для тих, кому їх ще не призначили. Тілова гама застосунку. */
+const PALETTE = ['#0F6B5C', '#8F5514', '#2F6DA8', '#7A3E8F', '#3E7A4A', '#A03C3C']
+
+/**
+ * Справжні учасники дому замість демо-людей із seed.
+ * Ім'я й аватар кладе тригер handle_new_user із метаданих Google.
+ */
+async function loadMembers(householdId: string) {
+  const db = cloud()
+  const { data, error } = await db
+    .from('household_members')
+    .select('profile_id, color, joined_at, profiles(display_name, avatar_url)')
+    .eq('household_id', householdId)
+    .order('joined_at')
+  if (error || !data?.length) return
+
+  const members: Member[] = data.map((row, i) => {
+    const p = row.profiles as unknown as { display_name?: string; avatar_url?: string } | null
+    const name = (p?.display_name || '').trim() || 'Учасник'
+    return {
+      id: row.profile_id as string,
+      name,
+      color: (row.color as string | null) || PALETTE[i % PALETTE.length],
+      initials: name.slice(0, 1).toUpperCase(),
+    }
+  })
+
+  const me = auth.status === 'in' ? auth.userId : members[0].id
+  applyCloudMembers(members, me)
 }
 
 /* ───────────────────────── дії ───────────────────────── */
