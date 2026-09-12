@@ -10,8 +10,13 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
  * Ключ публічний за задумом: Vite запікає VITE_* у бандл, тож він однаково
  * видно в devtools. Захищають політики RLS, а не таємність ключа.
  */
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined
+const url = import.meta.env.VITE_SUPABASE_URL
+
+// Supabase перейменував ключі: anon → publishable. Обидві назви живі,
+// і плутанина закономірна, тож приймаємо будь-яку.
+const key =
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  import.meta.env.VITE_SUPABASE_ANON_KEY
 
 export const isCloudConfigured = Boolean(url && key)
 
