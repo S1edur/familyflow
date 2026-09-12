@@ -3,7 +3,7 @@ import type {
   DB, Occurrence, Task, Currency, EntryKind, ID, Priority,
   Envelope, EnvelopeKind, Fund, Debt, RecurringPlan, TaskTemplate, Member, Rates,
 } from './types'
-import { seed } from './seed'
+import { emptyDB, seed } from './seed'
 import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
@@ -36,37 +36,33 @@ export function mutate(fn: (d: DB) => void) {
   emit()
 }
 
+const BOUND_KEY = 'ff.boundTo'
+
 /**
- * Підміняє демо-людей справжніми учасниками дому з бази.
+ * Привʼязати сховище до справжнього дому.
  *
- * Локальні задачі, витрати й покупки посилаються на сідові m1/m2. Якщо
- * просто замінити список, усі ці посилання зависнуть і все стане «вільним».
- * Тому старі ідентифікатори перемапуємо на нові за позицією: «я» стаю собою,
- * другий стає другим. Демо-дані лишаються зв'язними, поки не переїдуть у базу.
+ * Якщо браузер ще не бачив цього дому — демо-дані стираються начисто.
+ * Інакше сідові витрати й задачі змішались би зі справжніми, і потім
+ * не розібрати, де що. Користувач починає з порожнього, як і домовились:
+ * шаблон — це конверти, створені разом із домом у базі.
+ *
+ * Той самий механізм спрацьовує при зміні акаунта: інший дім — інші дані.
  */
-export function applyCloudMembers(next: Member[], meId: ID) {
-  if (!next.length) return
+export function bindHousehold(householdId: ID, members: Member[], meId: ID, envelopes: Envelope[]) {
+  let bound: string | null = null
+  try { bound = localStorage.getItem(BOUND_KEY) } catch { /* приватний режим */ }
+
+  if (bound !== householdId) {
+    db = materialize({ ...emptyDB(), members, meId, envelopes })
+    try { localStorage.setItem(BOUND_KEY, householdId) } catch { /* приватний режим */ }
+    emit()
+    return
+  }
+
   mutate(d => {
-    const remap = new Map<ID, ID>()
-    const oldMe = d.meId
-    const oldOthers = d.members.filter(m => m.id !== oldMe).map(m => m.id)
-    const newOthers = next.filter(m => m.id !== meId).map(m => m.id)
-
-    remap.set(oldMe, meId)
-    oldOthers.forEach((id, i) => { if (newOthers[i]) remap.set(id, newOthers[i]) })
-
-    const to = (id: ID | undefined) => (id && remap.get(id)) || id
-    for (const t of d.tasks) { t.assigneeId = to(t.assigneeId); t.createdBy = to(t.createdBy)!; t.completedBy = to(t.completedBy) }
-    for (const e of d.entries) e.createdBy = to(e.createdBy)!
-    for (const o of d.occurrences) { o.assigneeId = to(o.assigneeId); o.paidBy = to(o.paidBy) }
-    for (const i of d.shoppingItems) { i.addedBy = to(i.addedBy)!; i.checkedBy = to(i.checkedBy) }
-    for (const tr of d.trips) tr.shoppedBy = to(tr.shoppedBy)!
-    for (const tpl of d.taskTemplates) tpl.defaultAssigneeId = to(tpl.defaultAssigneeId)
-    for (const env of d.envelopes) env.ownerId = to(env.ownerId)
-    for (const p of d.recurringPlans) p.assigneeId = to(p.assigneeId)
-
-    d.members = next
+    d.members = members
     d.meId = meId
+    d.envelopes = envelopes
   })
 }
 

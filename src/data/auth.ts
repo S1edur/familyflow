@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { supabase, isCloudConfigured, cloud } from './supabase'
-import { applyCloudMembers } from './store'
-import type { Member } from './types'
+import { bindHousehold } from './store'
+import type { Envelope, EnvelopeKind, Member } from './types'
 
 /**
  * Вхід і належність до дому.
@@ -77,7 +77,7 @@ async function loadHousehold() {
   const h = data?.households as unknown as Household | undefined
   household = h ? { id: h.id, name: h.name } : null
   emit()
-  if (household) void loadMembers(household.id)
+  if (household) void loadHouseholdData(household.id)
 }
 
 /** Кольори для тих, кому їх ще не призначили. Тілова гама застосунку. */
@@ -87,16 +87,20 @@ const PALETTE = ['#0F6B5C', '#8F5514', '#2F6DA8', '#7A3E8F', '#3E7A4A', '#A03C3C
  * Справжні учасники дому замість демо-людей із seed.
  * Ім'я й аватар кладе тригер handle_new_user із метаданих Google.
  */
-async function loadMembers(householdId: string) {
+async function loadHouseholdData(householdId: string) {
   const db = cloud()
-  const { data, error } = await db
-    .from('household_members')
-    .select('profile_id, color, joined_at, profiles(display_name, avatar_url)')
-    .eq('household_id', householdId)
-    .order('joined_at')
-  if (error || !data?.length) return
 
-  const members: Member[] = data.map((row, i) => {
+  const [mRes, eRes] = await Promise.all([
+    db.from('household_members')
+      .select('profile_id, color, joined_at, profiles(display_name, avatar_url)')
+      .eq('household_id', householdId).order('joined_at'),
+    db.from('envelopes')
+      .select('id, name, kind, owner_id, sort_order, is_archived')
+      .eq('household_id', householdId).order('sort_order'),
+  ])
+  if (mRes.error || !mRes.data?.length) return
+
+  const members: Member[] = mRes.data.map((row, i) => {
     const p = row.profiles as unknown as { display_name?: string; avatar_url?: string } | null
     const name = (p?.display_name || '').trim() || 'Учасник'
     return {
@@ -107,8 +111,17 @@ async function loadMembers(householdId: string) {
     }
   })
 
+  const envelopes: Envelope[] = (eRes.data ?? []).map(r => ({
+    id: r.id as string,
+    name: r.name as string,
+    kind: r.kind as EnvelopeKind,
+    ownerId: (r.owner_id as string | null) ?? undefined,
+    sortOrder: r.sort_order as number,
+    archived: (r.is_archived as boolean) || undefined,
+  }))
+
   const me = auth.status === 'in' ? auth.userId : members[0].id
-  applyCloudMembers(members, me)
+  bindHousehold(householdId, members, me, envelopes)
 }
 
 /* ───────────────────────── дії ───────────────────────── */

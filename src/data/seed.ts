@@ -6,6 +6,21 @@ const HER = 'm2'
 const t = today()
 const y = new Date().getFullYear()
 
+/**
+ * Порожній старт для справжнього дому. Демо-дані (seed) лишаються тільки
+ * для режиму без входу — офлайнової однофайлової збірки.
+ * Конверти сюди не кладемо: їх створює create_household у базі.
+ */
+export function emptyDB(): DB {
+  return {
+    meId: ME,
+    rates: { USD: 41.6, EUR: 45.1 },
+    members: [],
+    envelopes: [], planLines: [], recurringPlans: [], occurrences: [], entries: [],
+    funds: [], debts: [], taskTemplates: [], tasks: [], shoppingItems: [], trips: [],
+  }
+}
+
 export function seed(): DB {
   return {
     meId: ME,
