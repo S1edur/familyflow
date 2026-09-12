@@ -12,3 +12,15 @@ export function readPinShopping(): boolean {
 export function writePinShopping(on: boolean) {
   try { localStorage.setItem(PIN_SHOPPING, on ? '1' : '0') } catch { /* приватний режим */ }
 }
+
+const SEEN_AT = 'ff.seenAt'
+
+/** Коли востаннє відкривали повідомлення. Перегляд, не дані сімʼї. */
+export function readSeenAt(): string {
+  try { return localStorage.getItem(SEEN_AT) ?? new Date(Date.now() - 7 * 864e5).toISOString() }
+  catch { return new Date(Date.now() - 7 * 864e5).toISOString() }
+}
+
+export function writeSeenAt(iso = new Date().toISOString()) {
+  try { localStorage.setItem(SEEN_AT, iso) } catch { /* приватний режим */ }
+}

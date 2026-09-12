@@ -5,9 +5,9 @@ import type {
 } from './types'
 import { seed } from './seed'
 import {
-  addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, today,
+  addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
-import { toBase } from '../lib/money'
+import { money, toBase } from '../lib/money'
 
 const KEY = 'familyflow.v1'
 const HORIZON_MONTHS = 13
@@ -329,6 +329,90 @@ export function fairness(d: DB) {
       created: d.tasks.filter(t => t.createdBy === m.id && t.createdAt.slice(0, 10) >= since).length,
     }
   })
+}
+
+/* ───────────────────────── повідомлення ───────────────────────── */
+
+export interface Notice {
+  id: string
+  text: string
+  detail?: string
+  at?: string            // мітка часу — лише в подій
+  to: string             // куди веде тап
+}
+
+/**
+ * Нічого не зберігаємо — перелік рахується на читанні (інваріант 4).
+ *
+ * Дві різні речі:
+ *   fresh — ПОДІЇ: щось сталось, мають мітку часу, можуть бути «новими»;
+ *   soon  — СТАН: що треба зробити найближчим часом. Воно не «нове», воно просто є.
+ *
+ * ПРАВИЛО, яке тут головне: «Ніколи не повідомляємо одному, що в другого
+ * прострочено» (CLAUDE.md). Тому soon містить виключно СВОЇ справи —
+ * призначені мені або вільні.
+ */
+export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[] } {
+  const t = today()
+  const soonEdge = addDays(t, 2)
+  const me = d.meId
+  const name = (id?: ID) => d.members.find(m => m.id === id)?.name ?? 'Хтось'
+
+  const fresh: Notice[] = []
+
+  // мені щось призначили — і це зробив не я
+  for (const x of d.tasks) {
+    if (x.assigneeId !== me || x.createdBy === me) continue
+    if (x.status === 'done' || x.status === 'dropped') continue
+    if (x.createdAt <= since) continue
+    // Безособове «призначено» замість «призначив/призначила»: рід із імені
+    // не вгадується (Микола, Ілля), а відмінювати імена в коді не можна.
+    fresh.push({
+      id: `task:${x.id}`, at: x.createdAt, to: '/tasks',
+      text: `Призначено вам: ${x.title}`,
+      detail: name(x.createdBy),
+    })
+  }
+
+  // партнер докинув у список покупок
+  for (const i of d.shoppingItems) {
+    if (i.tripId || i.addedBy === me || i.addedAt <= since) continue
+    fresh.push({
+      id: `shop:${i.id}`, at: i.addedAt, to: '/shopping',
+      text: `Нове в покупках: ${i.name}${i.qty ? ' · ' + i.qty : ''}`,
+      detail: name(i.addedBy),
+    })
+  }
+
+  fresh.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
+
+  const soon: Notice[] = []
+
+  // мої задачі: прострочені й на найближчі дні
+  for (const x of d.tasks) {
+    if (x.status === 'done' || x.status === 'dropped') continue
+    if (x.assigneeId && x.assigneeId !== me) continue        // чуже не показуємо
+    if (!x.dueDate || x.dueDate > soonEdge) continue
+    if (x.deferUntil && x.deferUntil > t) continue
+    soon.push({
+      id: `due:${x.id}`, to: '/tasks',
+      text: x.title, detail: relativeDue(x.dueDate).label,
+    })
+  }
+
+  // платежі: свої або нічиї
+  for (const o of d.occurrences) {
+    if (o.status !== 'due' && o.status !== 'projected') continue
+    if (o.assigneeId && o.assigneeId !== me) continue
+    if (o.dueDate > soonEdge) continue
+    soon.push({
+      id: `bill:${o.id}`, to: '/month',
+      text: o.name, detail: `${relativeDue(o.dueDate).label} · ${money(o.expectedMinor, o.currency)}`,
+    })
+  }
+
+  soon.sort((a, b) => a.text.localeCompare(b.text, 'uk'))
+  return { fresh, soon }
 }
 
 /* ───────────────────────── дії ───────────────────────── */

@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Avatar, Icon } from '../ui'
-import { useDB, setMe } from '../data/store'
+import { Avatar, Empty, Icon, SectionTitle, Sheet, toast } from '../ui'
+import { useDB, setMe, notices } from '../data/store'
+import { readSeenAt, writeSeenAt } from '../lib/prefs'
 
 /**
  * Назви екранів живуть тут, а не в самих сторінках: топ-бар забрав заголовки,
@@ -36,6 +38,32 @@ export function TopBar() {
   const title = TITLES[pathname] ?? 'Family Flow'
   const parent = TRAIL[pathname]
 
+  const [open, setOpen] = useState(false)
+  const [seenAt, setSeenAt] = useState(readSeenAt)
+  const { fresh, soon } = notices(db, seenAt)
+
+  // Тост на подію, що зʼявилась поки застосунок відкритий. Показуємо лише
+  // те, чого ще не показували — інакше кожен рендер сипав би тими самими.
+  const shown = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    if (shown.current === null) {           // перший рендер: не кричимо про накопичене
+      shown.current = new Set(fresh.map(f => f.id))
+      return
+    }
+    for (const f of fresh) {
+      if (shown.current.has(f.id)) continue
+      shown.current.add(f.id)
+      toast(f.text, { action: { label: 'Глянути', run: () => nav(f.to) } })
+    }
+  }, [fresh, nav])
+
+  const openPanel = () => setOpen(true)
+  const closePanel = () => {
+    setOpen(false)
+    const now = new Date().toISOString()
+    writeSeenAt(now); setSeenAt(now)
+  }
+
   return (
     <header className="sticky top-0 z-30 bg-bg/85 backdrop-blur border-b border-line">
       <div className="h-12 px-2 sm:px-4 flex items-center gap-1 min-w-0">
@@ -54,6 +82,16 @@ export function TopBar() {
         )}
         <span className="flex-1" />
 
+        <button onClick={openPanel} aria-label={fresh.length ? `Повідомлення, нових ${fresh.length}` : 'Повідомлення'}
+          className="relative h-9 w-9 shrink-0 grid place-items-center rounded-lg text-muted hover:bg-surface2">
+          {Icon.bell(18)}
+          {fresh.length > 0 && (
+            <span className="absolute top-1.5 right-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-accent text-white text-[9.5px] grid place-items-center num">
+              {fresh.length}
+            </span>
+          )}
+        </button>
+
         {/* перемикач учасника: на десктопі він уже є в боковій панелі */}
         <div className="sm:hidden flex items-center gap-0.5 shrink-0">
           {db.members.map(m => (
@@ -67,6 +105,48 @@ export function TopBar() {
           ))}
         </div>
       </div>
+
+      <Sheet open={open} onClose={closePanel} title="Повідомлення">
+        {!fresh.length && !soon.length && (
+          <Empty>Нічого нового. І нічого термінового — теж добре.</Empty>
+        )}
+
+        {fresh.length > 0 && <>
+          <SectionTitle>Нове</SectionTitle>
+          <ul className="divide-y divide-line">
+            {fresh.map(n => (
+              <li key={n.id}>
+                <button onClick={() => { closePanel(); nav(n.to) }}
+                  className="w-full text-left py-2.5 flex items-center gap-2">
+                  <span className="flex-1 min-w-0 text-[14px]">{n.text}
+                    {n.detail && <span className="text-faint"> · {n.detail}</span>}
+                  </span>
+                  <span className="text-faint shrink-0">{Icon.chev(15)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>}
+
+        {soon.length > 0 && <>
+          <SectionTitle>Найближчим часом</SectionTitle>
+          <ul className="divide-y divide-line">
+            {soon.map(n => (
+              <li key={n.id}>
+                <button onClick={() => { closePanel(); nav(n.to) }}
+                  className="w-full text-left py-2.5 flex items-center gap-2">
+                  <span className="flex-1 min-w-0 text-[14px] truncate">{n.text}</span>
+                  {n.detail && <span className="shrink-0 text-[12.5px] text-faint num">{n.detail}</span>}
+                  <span className="text-faint shrink-0">{Icon.chev(15)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[12px] text-faint mt-3 leading-snug">
+            Тут лише ваші справи. Про чуже прострочене застосунок не повідомляє.
+          </p>
+        </>}
+      </Sheet>
     </header>
   )
 }
