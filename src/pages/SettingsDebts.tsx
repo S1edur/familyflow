@@ -147,10 +147,9 @@ export default function SettingsDebts() {
 
   return (
     <div className="max-w-[760px] mx-auto pb-8">
-      <header className="px-4 pt-5 pb-3 sm:px-6 flex items-start justify-between gap-3">
+      <header className="px-4 pt-3 pb-3 sm:px-6 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-[22px] font-semibold tracking-tight">Борги</h1>
-          <p className="text-[13px] text-muted mt-1 num">
+          <p className="text-[13px] text-muted num">
             {active.length === 0
               ? 'Активних боргів немає'
               : `Лишилось ${mixed ? '≈ ' : ''}${money(totalBase)} у ${active.length} ${active.length === 1 ? 'борзі' : 'боргах'}`}

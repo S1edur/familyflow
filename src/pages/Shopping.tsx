@@ -68,8 +68,7 @@ export default function Shopping() {
 
   return (
     <div className="max-w-[680px] mx-auto pb-16 sm:pb-8">
-      <header className="px-4 pt-5 pb-3 sm:px-6 flex items-baseline justify-between">
-        <h1 className="text-[22px] font-semibold tracking-tight">Покупки</h1>
+      <header className="px-4 pt-3 pb-3 sm:px-6 flex items-baseline justify-between">
         <span className="text-[12.5px] text-faint num">{left} у списку</span>
       </header>
 

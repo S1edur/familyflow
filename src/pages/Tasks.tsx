@@ -153,8 +153,7 @@ export default function Tasks() {
 
   return (
     <div className="max-w-[760px] mx-auto">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
-        <h1 className="text-[22px] font-semibold tracking-tight mb-3">Задачі</h1>
+      <header className="px-4 pt-3 pb-3 sm:px-6">
         <Tabs value={view} onChange={setView} items={[
           { value: 'mine',  label: 'Мої',      badge: counts.mine },
           { value: 'today', label: 'Сьогодні', badge: counts.today },

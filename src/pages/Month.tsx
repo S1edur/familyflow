@@ -24,11 +24,12 @@ export default function Month() {
 
   return (
     <div className="max-w-[860px] mx-auto">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
+      <header className="px-4 pt-3 pb-3 sm:px-6">
         <div className="flex items-center gap-1 mb-3">
           <button onClick={() => setMonth(m => addMonths(m, -1))}
             className="h-8 w-8 grid place-items-center rounded-lg text-muted hover:bg-surface2 rotate-180">{Icon.chev(16)}</button>
-          <h1 className="text-[22px] font-semibold tracking-tight min-w-[140px] text-center">{monthTitle(month)}</h1>
+          {/* не h1: назву екрана несе топ-бар, це перемикач місяця */}
+          <div className="text-[22px] font-semibold tracking-tight min-w-[140px] text-center">{monthTitle(month)}</div>
           <button onClick={() => setMonth(m => addMonths(m, 1))}
             className="h-8 w-8 grid place-items-center rounded-lg text-muted hover:bg-surface2">{Icon.chev(16)}</button>
           {month !== thisMonth() && (

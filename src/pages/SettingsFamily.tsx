@@ -21,8 +21,7 @@ export default function SettingsFamily() {
 
   return (
     <div className="max-w-[760px] mx-auto pb-10">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
-        <h1 className="text-[22px] font-semibold tracking-tight">Сім'я і валюти</h1>
+      <header className="px-4 pt-3 pb-3 sm:px-6">
       </header>
 
       {/* ── хто зараз записує ── */}

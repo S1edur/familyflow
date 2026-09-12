@@ -140,9 +140,8 @@ export default function SettingsFunds() {
 
   return (
     <div className="max-w-[760px] mx-auto pb-10">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
-        <h1 className="text-[22px] font-semibold tracking-tight">Фонди</h1>
-        <p className="text-[13px] text-muted mt-1">
+      <header className="px-4 pt-3 pb-3 sm:px-6">
+        <p className="text-[13px] text-muted">
           Фонд — це гроші, відкладені наперед на те, що буде пізніше.
           {active.length > 0 && (
             <> Разом цього місяця <span className="num">{totalLabel}</span>.</>

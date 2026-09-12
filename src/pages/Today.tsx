@@ -30,9 +30,8 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
 
   return (
     <div className="max-w-[760px] mx-auto">
-      <header className="px-4 pt-5 pb-4 sm:px-6">
+      <header className="px-4 pt-3 pb-4 sm:px-6">
         <div className="text-[12.5px] text-faint">{longDate(t)}</div>
-        <h1 className="text-[22px] font-semibold tracking-tight">Сьогодні</h1>
       </header>
 
       <section className="px-4 sm:px-6">

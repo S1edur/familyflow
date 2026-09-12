@@ -16,8 +16,7 @@ export default function Settings() {
 
   return (
     <div className="max-w-[760px] mx-auto">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
-        <h1 className="text-[22px] font-semibold tracking-tight">Налаштування</h1>
+      <header className="px-4 pt-3 pb-3 sm:px-6">
       </header>
 
       <SectionTitle>Зараз записує</SectionTitle>

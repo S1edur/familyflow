@@ -159,9 +159,8 @@ export default function SettingsPlans() {
 
   return (
     <div className="max-w-[760px] mx-auto pb-10">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
+      <header className="px-4 pt-3 pb-3 sm:px-6">
         <div className="flex items-center gap-3">
-          <h1 className="flex-1 text-[22px] font-semibold tracking-tight">Регулярні платежі</h1>
           {!!db.recurringPlans.length && (
             <Btn variant="ghost" onClick={() => open(null)}>{Icon.plus(16)} Додати</Btn>
           )}

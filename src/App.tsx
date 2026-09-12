@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { Avatar, Icon } from './components/ui'
 import { QuickAdd } from './components/QuickAdd'
+import { TopBar } from './components/TopBar'
 import { useDB, setMe } from './data/store'
 import Today from './pages/Today'
 import Tasks from './pages/Tasks'
@@ -26,11 +27,41 @@ const NAV = [
   { to: '/funds',    label: 'Фонди',    icon: Icon.piggy },
 ]
 
+/**
+ * Мобільний таб-бар: рівно пʼять пунктів, «Витрата» рівно в центрі.
+ * Сім пунктів на 375px дають 53px на кожен — підписи не вміщуються,
+ * тому Місяць і Фонди живуть у «Ще» та в боковій панелі на десктопі.
+ */
+const TABS = [
+  { to: '/',         label: 'Сьогодні', icon: Icon.home },
+  { to: '/tasks',    label: 'Задачі',   icon: Icon.check },
+  { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
+  { to: '/settings', label: 'Ще',       icon: Icon.gear },
+]
+
 const SECONDARY = [
   { to: '/debts',    label: 'Борги',        icon: Icon.list },
   { to: '/history',  label: 'Історія',      icon: Icon.clock },
   { to: '/settings', label: 'Налаштування', icon: Icon.gear },
 ]
+
+function Tab({ n, path, cart }: {
+  n: { to: string; label: string; icon: (s?: number) => React.ReactNode }
+  path: string; cart: number
+}) {
+  const active = n.to === '/' ? path === '/' : path.startsWith(n.to)
+  return (
+    <NavLink to={n.to} end={n.to === '/'}
+      className={`flex flex-col items-center gap-0.5 py-2 text-[10.5px] ${active ? 'text-accent' : 'text-faint'}`}>
+      <span className="relative">
+        {n.icon(21)}
+        {n.to === '/shopping' && cart > 0 &&
+          <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] grid place-items-center num">{cart}</span>}
+      </span>
+      {n.label}
+    </NavLink>
+  )
+}
 
 export default function App() {
   const db = useDB()
@@ -91,7 +122,8 @@ export default function App() {
       </aside>
 
       {/* контент */}
-      <main className="flex-1 min-w-0 pb-32 sm:pb-8">
+      <main className="flex-1 min-w-0 pb-24 sm:pb-8">
+        <TopBar />
         <Routes>
           <Route path="/" element={<Today onQuickAdd={() => setQuick(true)} />} />
           <Route path="/tasks" element={<Tasks />} />
@@ -112,29 +144,21 @@ export default function App() {
 
       {/* мобільний таб-бар */}
       <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-surface/95 backdrop-blur border-t border-line safe-b">
-        <div className="grid grid-cols-6">
-          {[...NAV, { to: '/settings', label: 'Ще', icon: Icon.gear }].map(n => {
-            const active = n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to)
-            return (
-              <NavLink key={n.to} to={n.to} end={n.to === '/'}
-                className={`flex flex-col items-center gap-0.5 py-2 text-[10.5px] ${active ? 'text-accent' : 'text-faint'}`}>
-                <span className="relative">
-                  {n.icon(21)}
-                  {n.to === '/shopping' && cart > 0 &&
-                    <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full bg-accent text-white text-[9px] grid place-items-center num">{cart}</span>}
-                </span>
-                {n.label}
-              </NavLink>
-            )
-          })}
+        <div className="grid grid-cols-5">
+          {TABS.slice(0, 2).map(n => <Tab key={n.to} n={n} path={loc.pathname} cart={cart} />)}
+
+          {/* «Витрата» — не посилання, а дія: відкриває лист швидкого запису */}
+          <button onClick={() => setQuick(true)} aria-label="Записати витрату"
+            className="flex flex-col items-center gap-0.5 py-2 text-[10.5px] text-accent">
+            <span className="grid place-items-center h-[21px] w-[21px] rounded-full bg-accent text-white">
+              {Icon.plus(15)}
+            </span>
+            Витрата
+          </button>
+
+          {TABS.slice(2).map(n => <Tab key={n.to} n={n} path={loc.pathname} cart={cart} />)}
         </div>
       </nav>
-
-      {/* плаваюча кнопка на мобільному */}
-      <button onClick={() => setQuick(true)} aria-label="Додати витрату"
-        className="sm:hidden fixed left-4 bottom-[88px] z-40 p-3.5 rounded-full bg-accent text-white shadow-lg ring-4 ring-bg">
-        {Icon.plus(22)}
-      </button>
 
       <QuickAdd open={quick} onClose={() => setQuick(false)} />
     </div>

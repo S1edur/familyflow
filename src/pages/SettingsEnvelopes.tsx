@@ -74,12 +74,11 @@ export default function SettingsEnvelopes() {
 
   return (
     <div className="max-w-[760px] mx-auto">
-      <header className="px-4 pt-5 pb-3 sm:px-6">
+      <header className="px-4 pt-3 pb-3 sm:px-6">
         <Link to="/settings" className="inline-flex items-center gap-1 text-[12.5px] text-muted hover:text-ink">
           <span className="rotate-180">{Icon.chev(14)}</span>Налаштування
         </Link>
         <div className="flex items-center gap-3 mt-1.5">
-          <h1 className="flex-1 text-[22px] font-semibold tracking-tight">Конверти</h1>
           <Btn variant="primary" onClick={() => setEditing('new')}>{Icon.plus(16)} Новий</Btn>
         </div>
         <p className="text-[12.5px] text-faint mt-1.5">
