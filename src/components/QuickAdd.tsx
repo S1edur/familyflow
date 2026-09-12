@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet } from '../ui'
+import { Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet, toast } from '../ui'
 import { useDB, addEntry } from '../data/store'
 import { SYMBOL, money, parseAmount } from '../lib/money'
 import type { Currency, EntryKind } from '../data/types'
@@ -54,6 +54,10 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
       note: note.trim() || undefined,
       occurredOn: date || today(),
     })
+    // оптимістичне оновлення без спінера потребує сліду, інакше незрозуміло,
+    // чи взагалі щось сталось: лист закрився і все
+    const env = db.envelopes.find(e => e.id === envelopeId)
+    toast(`${kind === 'income' ? 'Дохід' : 'Записано'}: ${money(minor, currency)}${env ? ' · ' + env.name : ''}`)
     setRaw(''); setNote(''); setDate(today())
     onClose()
   }

@@ -107,6 +107,8 @@ body::before {
 .sheet-enter { animation: sheetUp .18s cubic-bezier(.2,.8,.3,1); }
 @keyframes sheetUp { from { transform: translateY(14px); opacity: 0 } to { transform: none; opacity: 1 } }
 .fade-in { animation: fade .15s ease-out; }
+.toast-in { animation: toastIn .2s cubic-bezier(.2,.8,.3,1); }
+@keyframes toastIn { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
 @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
 
 .safe-b { padding-bottom: env(safe-area-inset-bottom, 0px); }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Avatar, Btn, ConfirmButton, Empty, Field, FormActions, Icon,
-  IconButton, Input, ListRow, MoneyInput, Pill, SectionTitle, Select, Sheet,
+  IconButton, Input, ListRow, MoneyInput, Pill, SectionTitle, Select, Sheet, toast,
 } from '../ui'
 import {
   useDB, addShoppingItem, updateShoppingItem, toggleShoppingItem,
@@ -243,7 +243,9 @@ function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   const save = () => {
     if (!minor) return
+    const n = db.shoppingItems.filter(i => i.checkedAt && !i.tripId).length
     finishShopping(minor, envelopeId, store.trim() || undefined)
+    toast(`Похід записано: ${money(minor)} · ${n} поз.`)
     setStore('')
     setMinor(0)
     onClose()

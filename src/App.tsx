@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { Avatar, Icon } from './components/ui'
+import { Avatar, Icon, Toaster } from './components/ui'
 import { QuickAdd } from './components/QuickAdd'
 import { TopBar } from './components/TopBar'
 import { useDB, setMe } from './data/store'
@@ -161,6 +161,7 @@ export default function App() {
       </nav>
 
       <QuickAdd open={quick} onClose={() => setQuick(false)} />
+      <Toaster />
     </div>
   )
 }
