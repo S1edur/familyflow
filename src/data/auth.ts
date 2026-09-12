@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { supabase, isCloudConfigured, cloud } from './supabase'
 import { bindHousehold } from './store'
-import type { Envelope, EnvelopeKind, Member } from './types'
+import type { Member } from './types'
 
 /**
  * Вхід і належність до дому.
@@ -90,14 +90,9 @@ const PALETTE = ['#0F6B5C', '#8F5514', '#2F6DA8', '#7A3E8F', '#3E7A4A', '#A03C3C
 async function loadHouseholdData(householdId: string) {
   const db = cloud()
 
-  const [mRes, eRes] = await Promise.all([
-    db.from('household_members')
-      .select('profile_id, color, joined_at, profiles(display_name, avatar_url)')
-      .eq('household_id', householdId).order('joined_at'),
-    db.from('envelopes')
-      .select('id, name, kind, owner_id, sort_order, is_archived')
-      .eq('household_id', householdId).order('sort_order'),
-  ])
+  const mRes = await db.from('household_members')
+    .select('profile_id, color, joined_at, profiles(display_name, avatar_url)')
+    .eq('household_id', householdId).order('joined_at')
   if (mRes.error || !mRes.data?.length) return
 
   const members: Member[] = mRes.data.map((row, i) => {
@@ -111,17 +106,8 @@ async function loadHouseholdData(householdId: string) {
     }
   })
 
-  const envelopes: Envelope[] = (eRes.data ?? []).map(r => ({
-    id: r.id as string,
-    name: r.name as string,
-    kind: r.kind as EnvelopeKind,
-    ownerId: (r.owner_id as string | null) ?? undefined,
-    sortOrder: r.sort_order as number,
-    archived: (r.is_archived as boolean) || undefined,
-  }))
-
   const me = auth.status === 'in' ? auth.userId : members[0].id
-  bindHousehold(householdId, members, me, envelopes)
+  await bindHousehold(householdId, members, me)
 }
 
 /* ───────────────────────── дії ───────────────────────── */

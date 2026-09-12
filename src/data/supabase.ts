@@ -41,10 +41,18 @@ const key =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.VITE_SUPABASE_ANON_KEY
 
-export const isCloudConfigured = Boolean(url && key)
-
-export const supabase: SupabaseClient | null = isCloudConfigured
-  ? createClient(url!, key!, {
+/**
+ * Помилкове налаштування НЕ має вбивати застосунок.
+ *
+ * createClient кидає на кривому URL — а це виконується під час завантаження
+ * модуля, тобто замість інтерфейсу користувач отримав би білу сторінку.
+ * Заглушка на кшталт https://<project-ref>.supabase.co саме так і робила.
+ * Тому падіння ловимо й тихо лишаємось у локальному режимі, сказавши причину.
+ */
+function makeClient(): SupabaseClient | null {
+  if (!url || !key) return null
+  try {
+    return createClient(url, key, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -52,7 +60,17 @@ export const supabase: SupabaseClient | null = isCloudConfigured
         detectSessionInUrl: true,
       },
     })
-  : null
+  } catch (e) {
+    console.error(
+      'Supabase не піднявся, працюємо на локальних даних:',
+      e instanceof Error ? e.message : e,
+    )
+    return null
+  }
+}
+
+export const supabase: SupabaseClient | null = makeClient()
+export const isCloudConfigured = supabase !== null
 
 /** Кидає, якщо викликано без налаштованих ключів — щоб помилка була гучною, а не мовчазною. */
 export function cloud(): SupabaseClient {

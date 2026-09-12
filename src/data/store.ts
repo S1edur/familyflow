@@ -8,6 +8,7 @@ import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
 import { money, toBase } from '../lib/money'
+import { pullAll, pushDiff } from './sync'
 
 const KEY = 'familyflow.v1'
 const HORIZON_MONTHS = 13
@@ -29,11 +30,31 @@ function emit() {
   listeners.forEach(l => l())
 }
 
+/** Дім, до якого привʼязане сховище. null — режим без входу, тільки локально. */
+let householdId: ID | null = null
+
+/** Останнє повідомлення про невдалу відправку — щоб не сипати однаковими. */
+let lastPushError = ''
+
+function push(before: DB) {
+  if (!householdId) return
+  const h = householdId
+  const snapshot = db
+  void pushDiff(before, snapshot, h).catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg === lastPushError) return
+    lastPushError = msg
+    console.error('Не вдалось відправити зміни:', msg)
+  })
+}
+
 export function mutate(fn: (d: DB) => void) {
+  const before = db
   const next: DB = structuredClone(db)
   fn(next)
   db = materialize(next)
   emit()
+  push(before)
 }
 
 const BOUND_KEY = 'ff.boundTo'
@@ -48,21 +69,29 @@ const BOUND_KEY = 'ff.boundTo'
  *
  * Той самий механізм спрацьовує при зміні акаунта: інший дім — інші дані.
  */
-export function bindHousehold(householdId: ID, members: Member[], meId: ID, envelopes: Envelope[]) {
+export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   let bound: string | null = null
   try { bound = localStorage.getItem(BOUND_KEY) } catch { /* приватний режим */ }
 
-  if (bound !== householdId) {
-    db = materialize({ ...emptyDB(), members, meId, envelopes })
-    try { localStorage.setItem(BOUND_KEY, householdId) } catch { /* приватний режим */ }
-    emit()
-    return
+  // Інший дім, ніж бачив цей браузер → демо-дані геть, щоб не змішувались
+  if (bound !== id) {
+    db = { ...emptyDB(), members, meId }
+    try { localStorage.setItem(BOUND_KEY, id) } catch { /* приватний режим */ }
   }
 
-  mutate(d => {
-    d.members = members
-    d.meId = meId
-    d.envelopes = envelopes
+  const cloud = await pullAll(id)
+  // Прийняте з бази ставимо НАПРЯМУ, без mutate: інакше відправили б назад
+  // те, що щойно звідти приїхало.
+  const pulled: DB = { ...db, ...cloud, members, meId }
+
+  // materialize міг догенерувати платежі й задачі — ось їх відправити треба
+  const withGenerated = materialize(structuredClone(pulled))
+  db = withGenerated
+  householdId = id
+  emit()
+
+  await pushDiff(pulled, withGenerated, id).catch((e: unknown) => {
+    console.error('Не вдалось відправити згенероване:', e instanceof Error ? e.message : e)
   })
 }
 
@@ -81,7 +110,41 @@ export function useDB(): DB {
 
 export const getDB = () => db
 // function declaration, а не const: викликається з materialize() ще до цього рядка
-export function uid() { return Math.random().toString(36).slice(2, 10) }
+/**
+ * Стабільний ідентифікатор для того, що ГЕНЕРУЄТЬСЯ, а не створюється людиною.
+ *
+ * Платежі й задачі народжуються з правил на кожному пристрої окремо. З
+ * випадковими id твій телефон і телефон партнера створили б для однієї
+ * оренди два різні рядки — і другий розбився б об unique(plan, due_date).
+ * Тому id виводиться з самого ключа: обидва пристрої отримують однаковий,
+ * і повторна відправка нічого не дублює.
+ */
+export function stableId(seed: string): ID {
+  let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b
+  for (let i = 0; i < seed.length; i++) {
+    const c = seed.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 16777619)
+    h2 = Math.imul(h2 ^ c, 2246822519)
+    h3 = Math.imul(h3 ^ c, 3266489917)
+    h4 = Math.imul(h4 ^ c, 668265263)
+  }
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, '0')
+  const raw = hex(h1) + hex(h2) + hex(h3) + hex(h4)
+  // форма uuid v4, щоб Postgres прийняв як uuid
+  return [
+    raw.slice(0, 8), raw.slice(8, 12),
+    '4' + raw.slice(13, 16),
+    ((parseInt(raw[16], 16) & 0x3) | 0x8).toString(16) + raw.slice(17, 20),
+    raw.slice(20, 32),
+  ].join('-')
+}
+
+export function uid() {
+  // Справжній uuid, а не вісім випадкових символів: той самий ідентифікатор
+  // має годитись і локально, і як первинний ключ у Postgres. Інакше кожен
+  // створений на пристрої рядок не вставився б у базу.
+  return crypto.randomUUID()
+}
 
 /* ───────────────────────── генерація ───────────────────────── */
 
@@ -100,7 +163,7 @@ function materialize(d: DB): DB {
       if (existing.has(k)) continue
       existing.add(k)
       d.occurrences.push({
-        id: uid(), planId: p.id, envelopeId: p.envelopeId, name: p.name,
+        id: stableId(`occ:${p.id}:${date}`), planId: p.id, envelopeId: p.envelopeId, name: p.name,
         dueDate: date, expectedMinor: p.expectedMinor, currency: p.currency,
         status: date <= t ? 'due' : 'projected', assigneeId: p.assigneeId,
       })
@@ -137,7 +200,7 @@ function pushTask(d: DB, templateId: ID, due: string, tpl: DB['taskTemplates'][n
   if (keys.has(k)) return
   keys.add(k)
   d.tasks.push({
-    id: uid(), templateId, occurrenceKey: due, title: tpl.title, area: tpl.area,
+    id: stableId(`task:${templateId}:${due}`), templateId, occurrenceKey: due, title: tpl.title, area: tpl.area,
     status: 'todo', priority: 0, effort: tpl.effort, assigneeId: who,
     dueDate: due, createdBy: who ?? d.meId, createdAt: new Date().toISOString(),
   })
