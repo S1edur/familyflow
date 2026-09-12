@@ -2,8 +2,11 @@ import { useState } from 'react'
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { Avatar, Icon, Toaster } from './components/ui'
 import { QuickAdd } from './components/QuickAdd'
+import Welcome from './pages/Welcome'
+import Onboarding from './pages/Onboarding'
 import { TopBar } from './components/TopBar'
 import { useDB, setMe } from './data/store'
+import { useAuth, useHousehold } from './data/auth'
 import Today from './pages/Today'
 import Tasks from './pages/Tasks'
 import Month from './pages/Month'
@@ -59,6 +62,21 @@ function Tab({ n, path, cart }: {
 }
 
 export default function App() {
+  const auth = useAuth()
+  const household = useHousehold()
+
+  // Без ключів застосунок працює як раніше, на локальних даних — це режим
+  // офлайнової однофайлової збірки, а не помилка налаштування.
+  if (auth.status === 'loading' || (auth.status === 'in' && household === undefined)) {
+    return <div className="min-h-full grid place-items-center text-[13px] text-faint">Хвилинку…</div>
+  }
+  if (auth.status === 'anon') return <Welcome />
+  if (auth.status === 'in' && household === null) return <Onboarding />
+
+  return <Shell />
+}
+
+function Shell() {
   const db = useDB()
   const [quick, setQuick] = useState(false)
   const loc = useLocation()
