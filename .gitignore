@@ -7,3 +7,6 @@ tsconfig.tsbuildinfo
 
 # Vercel
 .vercel
+
+# Матеріал для читання, не частина застосунку
+design-system-other project/
