@@ -3,7 +3,10 @@ const MONTHS_NOM = ['Січень','Лютий','Березень','Квітен
 const MONTHS_SHORT = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру']
 const DOW_SHORT = ['нд','пн','вт','ср','чт','пт','сб']
 
-export const iso = (d: Date) => d.toISOString().slice(0, 10)
+// локальний календар, НЕ toISOString(): parse() будує локальну північ,
+// а toISOString() перевів би її в попередню UTC-добу — addDays() губив би день
+export const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 export const today = () => iso(new Date())
 export const monthKey = (d: Date | string) =>
   (typeof d === 'string' ? d : iso(d)).slice(0, 7)
