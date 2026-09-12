@@ -113,18 +113,41 @@ function pushTask(d: DB, templateId: ID, due: string, tpl: DB['taskTemplates'][n
   })
 }
 
+/** Вага походу в тій самій шкалі 1–3, що й effort задачі. Похідна з кількості позицій. */
+export function tripWeight(d: DB, tripId: ID): 1 | 2 | 3 {
+  const n = d.shoppingItems.filter(i => i.tripId === tripId).length
+  return n >= 13 ? 3 : n >= 5 ? 2 : 1
+}
+
+/** Товари, які ще не куплені. null — якщо в магазин іти нема за чим. */
+export function shoppingPending(d: DB): { count: number; allChecked: boolean } | null {
+  const inList = d.shoppingItems.filter(i => !i.tripId)
+  if (!inList.length) return null
+  return { count: inList.length, allChecked: inList.every(i => i.checkedAt) }
+}
+
 /** Хто менше закрив за 28 днів — самокорекція замість жорсткої черги. */
 function leastLoaded(d: DB): ID | undefined {
   const since = addDays(today(), -28)
   const load = new Map<ID, number>()
   d.members.forEach(m => load.set(m.id, 0))
+  const add = (id: ID | undefined, n: number) => {
+    if (id && load.has(id)) load.set(id, (load.get(id) ?? 0) + n)
+  }
   for (const t of d.tasks) {
     if (t.status === 'done' && t.completedBy && t.completedAt && t.completedAt.slice(0, 10) >= since) {
-      load.set(t.completedBy, (load.get(t.completedBy) ?? 0) + t.effort)
+      add(t.completedBy, t.effort)
     } else if (t.status !== 'done' && t.status !== 'dropped' && t.assigneeId) {
       // відкриті теж вважаємо навантаженням, інакше при рівному рахунку все падає на першого
-      load.set(t.assigneeId, (load.get(t.assigneeId) ?? 0) + t.effort)
+      add(t.assigneeId, t.effort)
     }
+  }
+  // похід у магазин і оплата рахунків — така сама робота, і досі вона не рахувалась
+  for (const tr of d.trips) {
+    if (tr.completedAt.slice(0, 10) >= since) add(tr.shoppedBy, tripWeight(d, tr.id))
+  }
+  for (const o of d.occurrences) {
+    if (o.status === 'paid' && o.paidOn && o.paidOn >= since) add(o.paidBy, 1)
   }
   return [...load.entries()].sort((a, b) => a[1] - b[1])[0]?.[0]
 }
@@ -255,14 +278,31 @@ export function monthSummary(d: DB, month: string) {
   return { income, obligationsLeft, obligationsPaid, fundsRequired, spentVariable, free }
 }
 
+/**
+ * Баланс навантаження за 28 днів. Рахує ТРИ джерела: виконані задачі,
+ * походи в магазин і підтверджені платежі. shoppedBy і paidBy зберігались
+ * і раніше — просто ніхто їх не читав, тож похід і оплата рахунків
+ * не зараховувались нікому.
+ */
 export function fairness(d: DB) {
   const since = addDays(today(), -28)
-  return d.members.map(m => ({
-    member: m,
-    done: d.tasks.filter(t => t.status === 'done' && t.completedBy === m.id && (t.completedAt ?? '') .slice(0, 10) >= since)
-      .reduce((s, t) => s + t.effort, 0),
-    created: d.tasks.filter(t => t.createdBy === m.id && t.createdAt.slice(0, 10) >= since).length,
-  }))
+  return d.members.map(m => {
+    const tasks = d.tasks
+      .filter(t => t.status === 'done' && t.completedBy === m.id && (t.completedAt ?? '').slice(0, 10) >= since)
+      .reduce((s, t) => s + t.effort, 0)
+    const trips = d.trips
+      .filter(t => t.shoppedBy === m.id && t.completedAt.slice(0, 10) >= since)
+      .reduce((s, t) => s + tripWeight(d, t.id), 0)
+    const bills = d.occurrences
+      .filter(o => o.status === 'paid' && o.paidBy === m.id && (o.paidOn ?? '') >= since)
+      .length
+    return {
+      member: m,
+      done: tasks + trips + bills,
+      tasks, trips, bills,
+      created: d.tasks.filter(t => t.createdBy === m.id && t.createdAt.slice(0, 10) >= since).length,
+    }
+  })
 }
 
 /* ───────────────────────── дії ───────────────────────── */
@@ -409,7 +449,10 @@ export function finishShopping(totalMinor: number, envelopeId: ID, store?: strin
       rateToBase: 1, amountBaseMinor: totalMinor, envelopeId, tripId,
       note: store || 'Покупки', createdBy: d.meId,
     })
-    d.shoppingItems = d.shoppingItems.filter(i => !i.checkedAt)
+    // Не видаляємо, а привʼязуємо до походу — так само, як finish_shopping у sql/.
+    // Зі списку вони зникають (список фільтрує !tripId), а кількість позицій
+    // лишається похідною: інваріант 4, нічого денормалізованого не зберігаємо.
+    for (const i of d.shoppingItems) if (i.checkedAt && !i.tripId) i.tripId = tripId
   })
 }
 

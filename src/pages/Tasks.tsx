@@ -1,15 +1,17 @@
 import { useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, ConfirmButton, DateInput, Empty, Field, Icon, Input,
   Pill, PriorityMark, Segmented, Sheet, Tabs, Textarea, priorityLabel,
 } from '../ui'
 import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
-  fairness, confirmOccurrence, skipOccurrence,
+  fairness, confirmOccurrence, skipOccurrence, shoppingPending,
 } from '../data/store'
 import type { DB, Occurrence, Priority, Task, TaskStatus } from '../data/types'
 import { money } from '../lib/money'
 import { addDays, relativeDue, shortDate, today } from '../lib/dates'
+import { readPinShopping, writePinShopping } from '../lib/prefs'
 
 type View = 'mine' | 'today' | 'all' | 'open'
 
@@ -27,6 +29,9 @@ const GROUPS: { status: TaskStatus; label: string }[] = [
 type Item =
   | { kind: 'task'; id: string; task: Task }
   | { kind: 'bill'; id: string; occ: Occurrence }
+  | { kind: 'shop'; id: 'shop'; count: number; allChecked: boolean }
+
+
 
 /**
  * Горизонт показу платежів.
@@ -52,6 +57,13 @@ const openBill = (o: Occurrence) => o.status === 'due' || o.status === 'projecte
 export default function Tasks() {
   const db = useDB()
   const [view, setView] = useState<View>('mine')
+  const [pinned, setPinned] = useState(readPinShopping)
+  const togglePin = () => { const next = !pinned; setPinned(next); writePinShopping(next) }
+
+  const pending = shoppingPending(db)
+  const shop: Item | null = pending
+    ? { kind: 'shop', id: 'shop', count: pending.count, allChecked: pending.allChecked }
+    : null
   const [draft, setDraft] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [billId, setBillId] = useState<string | null>(null)
@@ -108,11 +120,14 @@ export default function Tasks() {
       .map(task => ({ kind: 'task' as const, id: task.id, task }))
     if (status === 'todo') {
       rows.push(...bills.map(occ => ({ kind: 'bill' as const, id: occ.id, occ })))
+      if (shop && !pinned) rows.push(shop)
     }
-    return sortItems(rows)
+    const sorted = sortItems(rows)
+    // закріплений похід іде першим і не вдає із себе пріоритет, якого не має
+    return status === 'todo' && shop && pinned ? [shop, ...sorted] : sorted
   }
 
-  const openCount = visible.filter(x => x.status !== 'done').length + bills.length
+  const openCount = visible.filter(x => x.status !== 'done').length + bills.length + (shop ? 1 : 0)
 
   const done: Item[] = useMemo(() => {
     const since = addDays(t, -7)
@@ -168,8 +183,9 @@ export default function Tasks() {
               <span className="text-[12px] text-faint num">{rows.length}</span>
             </div>
             <ul className="border-y border-line divide-y divide-line bg-surface">
-              {rows.map(it => it.kind === 'task'
-                ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+              {rows.map(it =>
+                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                : it.kind === 'shop' ? <ShopRow key={it.id} item={it} pinned={pinned} onTogglePin={togglePin} />
                 : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
             </ul>
           </section>
@@ -202,8 +218,9 @@ export default function Tasks() {
           </button>
           {showDone && (
             <ul className="border-y border-line divide-y divide-line bg-surface">
-              {done.slice(0, 30).map(it => it.kind === 'task'
-                ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+              {done.slice(0, 30).map(it =>
+                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                : it.kind === 'shop' ? null
                 : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
             </ul>
           )}
@@ -213,6 +230,9 @@ export default function Tasks() {
       {/* баланс навантаження */}
       <section className="px-4 sm:px-6 mt-8">
         <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium mb-2">Баланс за 28 днів</h2>
+        {/* Рахуються задачі, походи в магазин і підтверджені платежі.
+            Розбивку віддаємо підказкою, а не цифрами: у діапазоні 40–60%
+            смуга має лишатись нейтральною і без чисел. */}
         <div className="h-2.5 rounded-full overflow-hidden flex bg-surface2">
           {share.map(s => (
             <div key={s.member.id} style={{
@@ -223,7 +243,7 @@ export default function Tasks() {
         </div>
         <div className="flex justify-between mt-1.5 text-[12.5px] text-faint">
           {share.map(s => (
-            <span key={s.member.id}>
+            <span key={s.member.id} title={breakdown(s)}>
               {s.member.name}
               {!balanced(share) && total > 0 && <span className="num"> · {Math.round((s.done / total) * 100)}%</span>}
             </span>
@@ -247,6 +267,15 @@ function plural(n: number, one: string, few: string, many: string) {
   return many
 }
 
+/** Підказка при наведенні: з чого склалось навантаження. */
+function breakdown(s: { tasks: number; trips: number; bills: number }) {
+  return [
+    `задачі ${s.tasks}`,
+    s.trips ? `магазин ${s.trips}` : null,
+    s.bills ? `платежі ${s.bills}` : null,
+  ].filter(Boolean).join(' · ')
+}
+
 function balanced(share: { done: number }[]) {
   const total = share.reduce((s, x) => s + x.done, 0)
   if (!total) return true
@@ -254,9 +283,9 @@ function balanced(share: { done: number }[]) {
 }
 
 function doneAt(it: Item) {
-  return it.kind === 'task'
-    ? it.task.completedAt ?? ''
-    : it.occ.paidOn ?? it.occ.dueDate
+  if (it.kind === 'task') return it.task.completedAt ?? ''
+  if (it.kind === 'shop') return ''
+  return it.occ.paidOn ?? it.occ.dueDate
 }
 
 /**
@@ -266,12 +295,15 @@ function doneAt(it: Item) {
  * тому стає перед безстроковими задачами без пріоритету.
  */
 function sortItems(rows: Item[]) {
+  // відкріплений рядок покупок не має ні пріоритету, ні дати — тож іде в хвіст
   const prio = (it: Item) => {
-    if (it.kind === 'bill') return 9
+    if (it.kind === 'bill' || it.kind === 'shop') return 9
     return it.task.priority === 0 ? 9 : it.task.priority
   }
-  const due = (it: Item) => (it.kind === 'bill' ? it.occ.dueDate : it.task.dueDate)
-  const created = (it: Item) => (it.kind === 'bill' ? it.occ.dueDate : it.task.createdAt)
+  const due = (it: Item) =>
+    it.kind === 'bill' ? it.occ.dueDate : it.kind === 'shop' ? undefined : it.task.dueDate
+  const created = (it: Item) =>
+    it.kind === 'bill' ? it.occ.dueDate : it.kind === 'shop' ? '9999' : it.task.createdAt
 
   return [...rows].sort((a, b) => {
     const pa = prio(a), pb = prio(b)
@@ -284,6 +316,48 @@ function sortItems(rows: Item[]) {
 }
 
 /* ───────────────────────── рядки ───────────────────────── */
+
+/**
+ * Похід у магазин рядком у списку задач. Будується з db.shoppingItems на льоту,
+ * у сховище не пишеться нічого (інваріант 4).
+ * Чекбокс не закриває його напряму: щоб завершити похід, потрібна сума з чека,
+ * тож обидва тапи ведуть на екран покупок.
+ */
+function ShopRow({ item, pinned, onTogglePin }: {
+  item: Extract<Item, { kind: 'shop' }>; pinned: boolean; onTogglePin: () => void
+}) {
+  const nav = useNavigate()
+  const go = () => nav('/shopping')
+
+  return (
+    <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11 group">
+      <button onClick={go} aria-label="Відкрити покупки"
+        className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent" />
+
+      <button onClick={go} className="shrink-0 text-faint" aria-hidden tabIndex={-1}>
+        {Icon.cart(15)}
+      </button>
+
+      <button onClick={go} className="flex-1 min-w-0 text-left">
+        <span className="text-[14px] block truncate">Сходити в магазин</span>
+      </button>
+
+      {item.allChecked
+        ? <Badge tone="accent">є сума з чека?</Badge>
+        : <span className="shrink-0 text-[12.5px] text-faint num">
+            {item.count} {plural(item.count, 'товар', 'товари', 'товарів')}
+          </span>}
+
+      <button onClick={onTogglePin}
+        aria-label={pinned ? 'Відкріпити' : 'Закріпити зверху'}
+        title={pinned ? 'Відкріпити' : 'Закріпити зверху'}
+        className={`shrink-0 p-1 -mr-1 rounded transition-colors ${
+          pinned ? 'text-accent' : 'text-faint opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}`}>
+        {Icon.pin(15)}
+      </button>
+    </li>
+  )
+}
 
 function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const db = useDB()

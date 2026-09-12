@@ -45,14 +45,17 @@ export default function Shopping() {
     const map = new Map<string, typeof db.shoppingItems>()
     for (const c of CATEGORIES) map.set(c, [])
     for (const i of db.shoppingItems) {
+      if (i.tripId) continue
       const c = i.category && map.has(i.category) ? i.category : 'Інше'
       map.get(c)!.push(i)
     }
     return [...map.entries()].filter(([, v]) => v.length)
   }, [db.shoppingItems])
 
-  const checked = db.shoppingItems.filter(i => i.checkedAt).length
-  const left = db.shoppingItems.length - checked
+  // у списку лишається те, що ще не привʼязане до завершеного походу
+  const inList = db.shoppingItems.filter(i => !i.tripId)
+  const checked = inList.filter(i => i.checkedAt).length
+  const left = inList.length - checked
 
   const submit = () => {
     const raw = draft.trim()
@@ -124,7 +127,7 @@ export default function Shopping() {
         </section>
       ))}
 
-      {!db.shoppingItems.length && (
+      {!inList.length && (
         <Empty>
           <p className="mb-3">Список на похід у магазин. Товари самі стають по відділах,<br className="hidden sm:inline" /> а ціни по кожному не питаємо — тільки сума з чека.</p>
           <Btn onClick={() => document.getElementById(ADD_INPUT_ID)?.focus()}>Додати перший товар</Btn>
@@ -210,6 +213,8 @@ function PastTrips() {
         <ul className="border-y border-line divide-y divide-line bg-surface">
           {trips.map(t => {
             const by = db.members.find(m => m.id === t.shoppedBy)
+            // кількість позицій тепер похідна — товари привʼязані до походу, а не видалені
+            const n = db.shoppingItems.filter(i => i.tripId === t.id).length
             return (
               <ListRow key={t.id}>
                 <span className="shrink-0 text-[13px] text-faint num w-[52px]">
@@ -217,6 +222,7 @@ function PastTrips() {
                 </span>
                 <span className="flex-1 min-w-0 text-[14px] truncate">
                   {t.store || <span className="text-faint">Без магазину</span>}
+                  {n > 0 && <span className="text-faint text-[12.5px] num"> · {n} поз.</span>}
                 </span>
                 <span className="text-[14px] num">{money(t.totalMinor, t.currency)}</span>
                 <Avatar member={by} size={18} />

@@ -1,7 +1,8 @@
 import { Avatar, Btn, Empty, Icon, PriorityMark } from '../components/ui'
-import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus } from '../data/store'
+import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending } from '../data/store'
 import { money, moneyShort } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
+import { readPinShopping } from '../lib/prefs'
 import { Link } from 'react-router-dom'
 import type { Occurrence } from '../data/types'
 
@@ -20,7 +21,10 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
   const all = upcomingOccurrences(db, 7)
   const overdue = all.filter(o => o.dueDate < t)
   const soon = all.filter(o => o.dueDate >= t)
-  const cart = db.shoppingItems.filter(i => !i.checkedAt).length
+  const cart = db.shoppingItems.filter(i => !i.checkedAt && !i.tripId).length
+  // закріплення керується на екрані «Задачі»; тут лише поважаємо вибір
+  const pending = shoppingPending(db)
+  const shopRow = pending && readPinShopping() ? pending : null
   const fundsTotal = db.funds.reduce((s, f) => s + fundBalance(db, f.id), 0)
   const debtLeft = db.debts.filter(d => !d.closedOn).reduce((s, d) => s + debtStatus(db, d.id).remaining, 0)
 
@@ -46,8 +50,19 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
           <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium">Мої задачі</h2>
           <Link to="/tasks" className="text-[12.5px] text-accent">усі</Link>
         </div>
-        {mine.length ? (
+        {mine.length || shopRow ? (
           <ul className="border-y border-line divide-y divide-line bg-surface">
+            {shopRow && (
+              <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11">
+                <Link to="/shopping" aria-label="Відкрити покупки"
+                  className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent" />
+                <span className="shrink-0 text-faint">{Icon.cart(15)}</span>
+                <Link to="/shopping" className="flex-1 min-w-0 text-[14px] truncate">Сходити в магазин</Link>
+                {shopRow.allChecked
+                  ? <span className="shrink-0 text-[12px] text-accent">є сума з чека?</span>
+                  : <span className="shrink-0 text-[12.5px] text-faint num">{shopRow.count}</span>}
+              </li>
+            )}
             {mine.slice(0, 8).map(x => {
               const due = x.dueDate ? relativeDue(x.dueDate) : null
               return (
@@ -57,7 +72,8 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
                   <PriorityMark p={x.priority} />
                   <span className="flex-1 text-[14px] truncate">{x.title}</span>
                   {!x.assigneeId && <span className="text-[11px] text-faint border border-dashed border-line2 rounded px-1.5">вільна</span>}
-                  {due && <span className={`text-[12px] num ${due.tone === 'over' ? 'text-stop' : due.tone === 'today' ? 'text-warn' : 'text-faint'}`}>{due.label}</span>}
+                  {/* прострочення бурштинове, не червоне — CLAUDE.md, правила інтерфейсу */}
+                  {due && <span className={`text-[12px] num ${due.tone === 'over' ? 'text-warn font-medium' : due.tone === 'today' ? 'text-warn' : 'text-faint'}`}>{due.label}</span>}
                 </li>
               )
             })}
