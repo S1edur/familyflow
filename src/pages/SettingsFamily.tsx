@@ -3,7 +3,7 @@ import {
   Avatar, Badge, Btn, Card, ConfirmButton, Field, FormActions, Icon, Input,
   Pill, SectionTitle, Sheet,
 } from '../ui'
-import { useDB, setMe, addMember, updateMember, setRates, resetAll } from '../data/store'
+import { useDB, setMe, updateMember, setRates, resetAll } from '../data/store'
 import type { Member } from '../data/types'
 import { money } from '../lib/money'
 
@@ -47,7 +47,9 @@ export default function SettingsFamily() {
       </div>
 
       {/* ── учасники ── */}
-      <SectionTitle right={<Btn variant="quiet" onClick={() => setEditing('new')}>{Icon.plus(16)} Додати</Btn>}>
+      {/* Учасника не «додають» вписуванням — він приходить за кодом запрошення
+          і приносить своє імʼя з Google. Кнопка тут обіцяла б неможливе. */}
+      <SectionTitle>
         Учасники
       </SectionTitle>
       <ul className="border-y border-line divide-y divide-line bg-surface">
@@ -106,17 +108,16 @@ export default function SettingsFamily() {
         </Card>
       </div>
 
-      <Sheet open={editing !== null} onClose={() => setEditing(null)}
-             title={editing === 'new' ? 'Новий учасник' : 'Учасник'}>
-        {editing !== null && (
+      <Sheet open={editing !== null && editing !== 'new'} onClose={() => setEditing(null)}
+             title="Учасник">
+        {editing !== null && editing !== 'new' && (
           <MemberForm
-            initial={editing === 'new' ? undefined : editing}
+            initial={editing}
             taken={db.members.map(m => m.color)}
-            onSave={v => {
-              if (editing === 'new') addMember(v)
-              else updateMember(editing.id, v)
-              setEditing(null)
-            }}
+            /* Імʼя партнера редагувати не можна: profiles_update дозволяє
+               правити лише власний профіль, і база відхилила б спробу. */
+            nameLocked={editing.id !== db.meId}
+            onSave={v => { updateMember(editing.id, v); setEditing(null) }}
             onCancel={() => setEditing(null)}
           />
         )}
@@ -146,9 +147,10 @@ function RateField({ code, symbol, value }: { code: 'USD' | 'EUR'; symbol: strin
   )
 }
 
-function MemberForm({ initial, taken, onSave, onCancel }: {
+function MemberForm({ initial, taken, nameLocked, onSave, onCancel }: {
   initial?: Member
   taken: string[]
+  nameLocked?: boolean
   onSave: (v: { name: string; color: string; initials?: string }) => void
   onCancel: () => void
 }) {
@@ -178,8 +180,12 @@ function MemberForm({ initial, taken, onSave, onCancel }: {
         <div className="text-[13.5px] text-faint">Так учасник виглядатиме в задачах і платежах.</div>
       </div>
 
-      <Field label="Ім'я" htmlFor="m-name">
-        <Input id="m-name" value={name} onChange={setName} autoFocus placeholder="Іра" onEnter={submit} />
+      <Field label="Ім'я" htmlFor="m-name"
+        hint={nameLocked
+          ? 'Імʼя партнер міняє в себе — воно приходить із його акаунта Google'
+          : undefined}>
+        <Input id="m-name" value={name} onChange={setName} disabled={nameLocked}
+          autoFocus={!nameLocked} placeholder="Іра" onEnter={submit} />
       </Field>
 
       <Field label="Ініціали" htmlFor="m-initials"

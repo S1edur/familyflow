@@ -8,7 +8,7 @@ import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
 import { money, toBase } from '../lib/money'
-import { pullAll, pushDiff } from './sync'
+import { pullAll, pullRates, pushDiff, pushMembers, pushRates } from './sync'
 
 const KEY = 'familyflow.v1'
 const HORIZON_MONTHS = 13
@@ -39,8 +39,12 @@ let lastPushError = ''
 function push(before: DB) {
   if (!householdId) return
   const h = householdId
-  const snapshot = db
-  void pushDiff(before, snapshot, h).catch((e: unknown) => {
+  const after = db
+  void Promise.all([
+    pushDiff(before, after, h),
+    pushMembers(before.members, after.members, h, after.meId),
+    pushRates(before.rates, after.rates),
+  ]).catch((e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e)
     if (msg === lastPushError) return
     lastPushError = msg
@@ -79,10 +83,10 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
     try { localStorage.setItem(BOUND_KEY, id) } catch { /* приватний режим */ }
   }
 
-  const cloud = await pullAll(id)
+  const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
   // Прийняте з бази ставимо НАПРЯМУ, без mutate: інакше відправили б назад
   // те, що щойно звідти приїхало.
-  const pulled: DB = { ...db, ...cloud, members, meId }
+  const pulled: DB = { ...db, ...cloud, members, meId, rates: { ...db.rates, ...rates } }
 
   // materialize міг догенерувати платежі й задачі — ось їх відправити треба
   const withGenerated = materialize(structuredClone(pulled))
