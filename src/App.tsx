@@ -122,6 +122,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Today onQuickAdd={() => setQuick(true)} />} />
           <Route path="/tasks" element={<Tasks />} />
+          {/* той самий список покупок, але як крок із задачі: своя назва і слід назад */}
+          <Route path="/tasks/shopping" element={<Shopping />} />
           <Route path="/month" element={<Month />} />
           <Route path="/shopping" element={<Shopping />} />
           <Route path="/funds" element={<Funds />} />

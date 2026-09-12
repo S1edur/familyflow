@@ -344,7 +344,8 @@ function ShopRow({ item, pinned, onTogglePin }: {
   item: Extract<Item, { kind: 'shop' }>; pinned: boolean; onTogglePin: () => void
 }) {
   const nav = useNavigate()
-  const go = () => nav('/shopping')
+  // не на вкладку «Покупки», а на крок із задачі — з поверненням у «Задачі»
+  const go = () => nav('/tasks/shopping')
 
   return (
     <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11 group">
