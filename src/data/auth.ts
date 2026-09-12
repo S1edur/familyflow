@@ -91,56 +91,21 @@ export async function signOut() {
   await cloud().auth.signOut()
 }
 
-/** Створити дім і покласти себе першим учасником. */
+/**
+ * Створити дім. Однією операцією на боці бази — і це не оптимізація.
+ *
+ * households_select каже: бачиш дім, якщо ти його учасник. Поки членство
+ * не створене, щойно вставлений дім тобі невидимий, і insert().select()
+ * повертає 403. Те саме зі стартовими конвертами. Тому дім, членство
+ * й конверти створює одна security definer функція, в одній транзакції.
+ */
 export async function createHousehold(name: string): Promise<Household> {
   const db = cloud()
-  const { data: h, error } = await db
-    .from('households')
-    .insert({ name: name.trim() || 'Наша сім\'я' })
-    .select('id, name')
-    .single()
-  if (error) throw error
-
-  const { data: { user } } = await db.auth.getUser()
-  if (!user) throw new Error('Немає сесії')
-
-  const { error: mErr } = await db
-    .from('household_members')
-    .insert({ household_id: h.id, profile_id: user.id })
-  if (mErr) throw mErr
-
-  await seedEnvelopes(h.id)
-  household = { id: h.id, name: h.name }
-  emit()
+  const { error } = await db.rpc('create_household', { p_name: name.trim() })
+  if (error) throw new Error(error.message)
+  await loadHousehold()
+  if (!household) throw new Error('Дім створено, але не вдалось його прочитати')
   return household
-}
-
-/**
- * Стартові конверти. Це вміст sql/05_seed.sql, який не можна було виконати
- * руками: там заглушка '<household>' замість справжнього ідентифікатора,
- * бо дім створюється тільки тут.
- */
-const STARTER: Array<[string, string, number]> = [
-  ['Дохід', 'income', 0],
-  ['Оренда / іпотека', 'fixed', 10],
-  ['Комуналка', 'fixed', 20],
-  ['Інтернет і звʼязок', 'fixed', 30],
-  ['Підписки', 'fixed', 40],
-  ['Продукти', 'variable', 50],
-  ['Транспорт / паливо', 'variable', 60],
-  ['Побут і дім', 'variable', 70],
-  ['Здоровʼя', 'variable', 80],
-  ['Розваги', 'variable', 90],
-  ['Нерегулярне', 'sinking', 100],
-  ['Накопичення', 'savings', 110],
-  ['Борги', 'debt', 120],
-]
-
-async function seedEnvelopes(householdId: string) {
-  const { error } = await cloud().from('envelopes').insert(
-    STARTER.map(([name, kind, sort_order]) => ({ household_id: householdId, name, kind, sort_order })),
-  )
-  if (error) throw error
 }
 
 /** Приєднатись за кодом. Уся перевірка — всередині RPC, бо RLS ховає запрошення. */
