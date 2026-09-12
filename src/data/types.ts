@@ -52,6 +52,7 @@ export interface RecurringPlan {
   anchorDate: string    // ISO date
   assigneeId?: ID
   fundId?: ID           // фонд, який фінансує цей платіж
+  debtId?: ID           // борг, який цей платіж гасить
   active: boolean
 }
 

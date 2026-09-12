@@ -183,7 +183,7 @@ create or replace function public.confirm_occurrence(
   p_rate       numeric default null
 ) returns uuid
 language plpgsql security definer set search_path = public as $$
-declare o occurrences%rowtype; amt bigint; rate numeric; eid uuid; f uuid;
+declare o occurrences%rowtype; amt bigint; rate numeric; eid uuid; f uuid; dbt uuid;
 begin
   select * into o from occurrences where id = p_occurrence and household_id = my_household_id();
   if not found then raise exception 'occurrence not found'; end if;
@@ -191,10 +191,17 @@ begin
   amt  := coalesce(p_amount, o.expected_amount_minor);
   rate := coalesce(p_rate, current_rate(o.currency));
 
+  -- Платіж, що гасить борг, — це ОДИН запис debt_payment, який несе і конверт,
+  -- і борг: v_debt_status читає його як виплату, v_envelope_month — як витрату
+  -- місяця. Два записи про одну подію довелось би тримати в синхроні.
+  select debt_id into dbt from recurring_plans where id = o.recurring_plan_id;
+
   insert into entries (household_id, kind, occurred_on, amount_minor, currency,
-                       fx_rate_to_base, amount_base_minor, envelope_id, occurrence_id, created_by)
-  values (o.household_id, 'expense', coalesce(p_paid_on, current_date), amt, o.currency,
-          rate, round(amt * rate), o.envelope_id, o.id, auth.uid())
+                       fx_rate_to_base, amount_base_minor, envelope_id, debt_id, occurrence_id, created_by)
+  values (o.household_id,
+          case when dbt is not null then 'debt_payment'::entry_kind else 'expense'::entry_kind end,
+          coalesce(p_paid_on, current_date), amt, o.currency,
+          rate, round(amt * rate), o.envelope_id, dbt, o.id, auth.uid())
   returning id into eid;
 
   update occurrences
@@ -341,9 +348,9 @@ select
   en.household_id, en.id as envelope_id, en.name, en.kind, en.owner_id,
   p.period_month,
   coalesce(pl.planned_minor,0) as planned_minor,
-  coalesce(sum(e.amount_base_minor) filter (where e.kind = 'expense'),0) as actual_minor,
+  coalesce(sum(e.amount_base_minor) filter (where e.kind in ('expense','debt_payment')),0) as actual_minor,
   coalesce(pl.planned_minor,0)
-    - coalesce(sum(e.amount_base_minor) filter (where e.kind = 'expense'),0) as remaining_minor
+    - coalesce(sum(e.amount_base_minor) filter (where e.kind in ('expense','debt_payment')),0) as remaining_minor
 from envelopes en
 cross join (select distinct date_trunc('month', occurred_on)::date as period_month from entries
             union select distinct period_month from plan_lines) p

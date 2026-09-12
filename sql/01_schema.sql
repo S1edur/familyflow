@@ -124,6 +124,7 @@ create table recurring_plans (
   assignee_id           uuid references profiles(id),
   autoconfirm           boolean not null default false,  -- автосписання: підтверджувати автоматично
   fund_id               uuid,          -- FK нижче: фонд, який фінансує цей платіж
+  debt_id               uuid references debts(id) on delete set null,  -- борг, який цей платіж гасить
   is_active             boolean not null default true,
   created_at            timestamptz not null default now()
 );

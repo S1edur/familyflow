@@ -193,8 +193,11 @@ export function envelopeMonth(d: DB, month: string) {
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map(e => {
       const planned = d.planLines.find(p => p.envelopeId === e.id && p.month === month)?.plannedMinor ?? 0
+      // debt_payment теж витрата місяця: гроші пішли з рахунку. Той самий запис
+      // паралельно читається як виплата по боргу — дублювання немає.
       const actual = d.entries
-        .filter(x => x.kind === 'expense' && x.envelopeId === e.id && monthKey(x.occurredOn) === month)
+        .filter(x => (x.kind === 'expense' || x.kind === 'debt_payment')
+          && x.envelopeId === e.id && monthKey(x.occurredOn) === month)
         .reduce((s, x) => s + x.amountBaseMinor, 0)
       return { envelope: e, planned, actual, remaining: planned - actual }
     })
@@ -230,6 +233,11 @@ export function fundStatus(d: DB, fundId: ID) {
   // ще жодного внеску → нічого не почалось, докоряти нема за що
   const onTrack = !target || balance >= target * elapsed
   return { fund: f, balance, target, monthsLeft, required, progress, onTrack }
+}
+
+/** Конверт, до якого належать виплати боргів. Похідний: у Debt немає посилання на конверт. */
+export function debtEnvelopeId(d: DB): ID | undefined {
+  return d.envelopes.find(e => e.kind === 'debt' && !e.archived)?.id
 }
 
 export function debtStatus(d: DB, debtId: ID) {
@@ -270,7 +278,8 @@ export function monthSummary(d: DB, month: string) {
     .reduce((s, f) => s + fundStatus(d, f.id).required, 0)
 
   const spentVariable = d.entries
-    .filter(e => e.kind === 'expense' && monthKey(e.occurredOn) === month && !e.occurrenceId)
+    .filter(e => (e.kind === 'expense' || e.kind === 'debt_payment')
+      && monthKey(e.occurredOn) === month && !e.occurrenceId)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
   const obligationsPaid = obligationsAll - obligationsLeft
@@ -315,16 +324,25 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
     const on = paidOn ?? today()
     const rate = o.currency === 'UAH' ? 1 : d.rates[o.currency]
 
+    const plan0 = d.recurringPlans.find(p => p.id === o.planId)
+
+    // Платіж, що гасить борг, — це ОДИН запис debt_payment, який несе і конверт,
+    // і борг. debtStatus читає його як виплату, envelopeMonth — як витрату місяця.
+    // Два окремі записи про одну подію довелось би тримати в синхроні при
+    // кожній правці й видаленні.
     const entryId = uid()
     d.entries.push({
-      id: entryId, kind: 'expense', occurredOn: on, amountMinor: amt, currency: o.currency,
+      id: entryId,
+      kind: plan0?.debtId ? 'debt_payment' : 'expense',
+      occurredOn: on, amountMinor: amt, currency: o.currency,
       rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
-      envelopeId: o.envelopeId, occurrenceId: o.id, note: o.name, createdBy: d.meId,
+      envelopeId: o.envelopeId, debtId: plan0?.debtId,
+      occurrenceId: o.id, note: o.name, createdBy: d.meId,
     })
     o.status = 'paid'; o.paidOn = on; o.actualMinor = amt; o.paidBy = d.meId
 
     // фінансується фондом → списуємо з фонду, а не рахуємо витрату двічі
-    const plan = d.recurringPlans.find(p => p.id === o.planId)
+    const plan = plan0
     if (plan?.fundId) {
       d.entries.push({
         id: uid(), kind: 'fund_out', occurredOn: on, amountMinor: amt, currency: o.currency,

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Btn, Progress, Sheet } from '../components/ui'
-import { useDB, debtStatus, addEntry } from '../data/store'
+import { useDB, debtStatus, addEntry, debtEnvelopeId } from '../data/store'
 import { money, parseAmount } from '../lib/money'
 import { longDate, shortDate } from '../lib/dates'
 
@@ -68,7 +68,7 @@ export default function Debts() {
         <Btn variant="primary" full disabled={!parseAmount(raw)}
           onClick={() => {
             const m = parseAmount(raw)
-            if (m && debt) { addEntry({ kind: 'debt_payment', amountMinor: m, currency: debt.currency, debtId: debt.id }); setPayId(null) }
+            if (m && debt) { addEntry({ kind: 'debt_payment', amountMinor: m, currency: debt.currency, debtId: debt.id, envelopeId: debtEnvelopeId(db) }); setPayId(null) }
           }}>Записати платіж</Btn>
       </Sheet>
     </div>

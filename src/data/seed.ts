@@ -53,7 +53,7 @@ export function seed(): DB {
       { id: 'r5', name: 'Підписки',      envelopeId: 'e4', expectedMinor:    45_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 3,  anchorDate: `${y}-01-03`, assigneeId: ME,  active: true },
       { id: 'r6', name: 'Спортзал Іра',  envelopeId: 'e8', expectedMinor:    90_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 8,  anchorDate: `${y}-01-08`, assigneeId: HER, active: true },
       { id: 'r7', name: 'Страховка авто',envelopeId: 'e12',expectedMinor: 1_400_000, currency: 'UAH', amountMode: 'fixed',    freq: 'yearly',  byMonth: 2, byMonthDay: 12, anchorDate: `${y}-02-12`, fundId: 'f1', active: true },
-      { id: 'r8', name: 'Платіж батькам',envelopeId: 'e14',expectedMinor:   500_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 25, anchorDate: `${y}-01-25`, assigneeId: ME,  active: true },
+      { id: 'r8', name: 'Платіж батькам',envelopeId: 'e14',expectedMinor:   500_000, currency: 'UAH', amountMode: 'fixed',    freq: 'monthly', byMonthDay: 25, anchorDate: `${y}-01-25`, assigneeId: ME,  debtId: 'd1', active: true },
     ],
     occurrences: [],
     entries: [
