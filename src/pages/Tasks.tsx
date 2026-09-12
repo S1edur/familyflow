@@ -1,8 +1,15 @@
-import { useMemo, useState } from 'react'
-import { Avatar, Btn, Empty, Icon, PriorityMark, Sheet, Tabs, priorityLabel } from '../components/ui'
-import { useDB, addTask, completeTask, updateTask, setPriority, setAssignee, fairness } from '../data/store'
-import type { Priority, Task, TaskStatus } from '../data/types'
-import { addDays, relativeDue, today } from '../lib/dates'
+import { useMemo, useRef, useState } from 'react'
+import {
+  Avatar, Badge, Btn, ConfirmButton, DateInput, Empty, Field, Icon, Input,
+  Pill, PriorityMark, Segmented, Sheet, Tabs, Textarea, priorityLabel,
+} from '../ui'
+import {
+  useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
+  fairness, confirmOccurrence, skipOccurrence,
+} from '../data/store'
+import type { DB, Occurrence, Priority, Task, TaskStatus } from '../data/types'
+import { money } from '../lib/money'
+import { addDays, relativeDue, shortDate, today } from '../lib/dates'
 
 type View = 'mine' | 'today' | 'all' | 'open'
 
@@ -12,15 +19,49 @@ const GROUPS: { status: TaskStatus; label: string }[] = [
   { status: 'backlog', label: 'Колись' },
 ]
 
+/**
+ * Рядок списку — або справжня задача, або платіж.
+ * Платіж НЕ зберігається як Task: він будується на льоту з db.occurrences
+ * при кожному рендері (інваріант 4 — похідне не зберігається).
+ */
+type Item =
+  | { kind: 'task'; id: string; task: Task }
+  | { kind: 'bill'; id: string; occ: Occurrence }
+
+/**
+ * Горизонт показу платежів.
+ * Платежі генеруються на 13 місяців уперед — без стелі список потоне в сотнях
+ * рядків, як колись тонув у восьми «винести сміття» підряд.
+ * 7 днів у робочих вкладках: стільки ж живе горизонт повторюваних задач
+ * (TASK_HORIZON_DAYS) і стільки ж показує relativeDue() як «через N дн.»,
+ * далі вона вже друкує голу дату — тобто це межа, до якої дата ще відчувається
+ * як «скоро». «Всі» піднімає стелю до 31 дня: це рівно та довжина, за якою
+ * стоїть окремий екран «Місяць» із повним чеклістом платежів.
+ */
+const BILL_DAYS_WORK = 7
+const BILL_DAYS_ALL = 31
+
+const EFFORTS: { value: '1' | '2' | '3'; label: string }[] = [
+  { value: '1', label: 'Легка' },
+  { value: '2', label: 'Середня' },
+  { value: '3', label: 'Важка' },
+]
+
+const openBill = (o: Occurrence) => o.status === 'due' || o.status === 'projected'
+
 export default function Tasks() {
   const db = useDB()
   const [view, setView] = useState<View>('mine')
   const [draft, setDraft] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
+  const [billId, setBillId] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(false)
+  const draftRef = useRef<HTMLInputElement>(null)
+
+  const t = today()
+  const billHorizon = view === 'all' ? addDays(t, BILL_DAYS_ALL) : addDays(t, BILL_DAYS_WORK)
 
   const visible = useMemo(() => {
-    const t = today()
     return db.tasks.filter(x => {
       if (x.status === 'dropped') return false
       if (x.deferUntil && x.deferUntil > t && x.status !== 'done') return false
@@ -31,16 +72,57 @@ export default function Tasks() {
       if (view === 'open') return !x.assigneeId
       return true
     })
-  }, [db.tasks, view, db.meId])
+  }, [db.tasks, view, db.meId, t])
 
-  const counts = {
-    mine: db.tasks.filter(x => (x.assigneeId === db.meId || !x.assigneeId) && x.status !== 'done' && x.status !== 'dropped').length,
-    today: db.tasks.filter(x => x.dueDate && x.dueDate <= today() && x.status !== 'done').length,
-    open: db.tasks.filter(x => !x.assigneeId && x.status !== 'done' && x.status !== 'dropped').length,
+  // платежі — той самий фільтр вкладки, але зі своєю стелею по датах
+  const bills = useMemo(() => {
+    return db.occurrences.filter(o => {
+      if (!openBill(o)) return false
+      if (o.dueDate > billHorizon) return false
+      if (view === 'mine') return o.assigneeId === db.meId || !o.assigneeId
+      if (view === 'today') return o.dueDate <= t
+      if (view === 'open') return !o.assigneeId
+      return true
+    })
+  }, [db.occurrences, view, db.meId, t, billHorizon])
+
+  // скільки платежів лишилось за горизонтом — одним рядком, а не сотнею
+  const beyond = db.occurrences.filter(o => openBill(o) && o.dueDate > billHorizon).length
+
+  const counts = useMemo(() => {
+    const near = addDays(t, BILL_DAYS_WORK)
+    const mineBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= near && (o.assigneeId === db.meId || !o.assigneeId)).length
+    const todayBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= t).length
+    const openBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= near && !o.assigneeId).length
+    return {
+      mine: db.tasks.filter(x => (x.assigneeId === db.meId || !x.assigneeId) && x.status !== 'done' && x.status !== 'dropped').length + mineBills,
+      today: db.tasks.filter(x => x.dueDate && x.dueDate <= t && x.status !== 'done').length + todayBills,
+      open: db.tasks.filter(x => !x.assigneeId && x.status !== 'done' && x.status !== 'dropped').length + openBills,
+    }
+  }, [db.tasks, db.occurrences, db.meId, t])
+
+  // платежі живуть у «До виконання» — один список, а не друга секція поруч
+  const itemsFor = (status: TaskStatus): Item[] => {
+    const rows: Item[] = visible
+      .filter(x => x.status === status)
+      .map(task => ({ kind: 'task' as const, id: task.id, task }))
+    if (status === 'todo') {
+      rows.push(...bills.map(occ => ({ kind: 'bill' as const, id: occ.id, occ })))
+    }
+    return sortItems(rows)
   }
 
-  const done = visible.filter(x => x.status === 'done')
-    .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+  const openCount = visible.filter(x => x.status !== 'done').length + bills.length
+
+  const done: Item[] = useMemo(() => {
+    const since = addDays(t, -7)
+    const tasks: Item[] = visible.filter(x => x.status === 'done')
+      .map(task => ({ kind: 'task' as const, id: task.id, task }))
+    const settled: Item[] = db.occurrences
+      .filter(o => (o.status === 'paid' || o.status === 'skipped') && (o.paidOn ?? o.dueDate) >= since)
+      .map(occ => ({ kind: 'bill' as const, id: occ.id, occ }))
+    return [...tasks, ...settled].sort((a, b) => doneAt(b).localeCompare(doneAt(a)))
+  }, [visible, db.occurrences, t])
 
   const submit = () => {
     const title = draft.trim()
@@ -49,7 +131,8 @@ export default function Tasks() {
     setDraft('')
   }
 
-  const open = openId ? db.tasks.find(t => t.id === openId) ?? null : null
+  const open = openId ? db.tasks.find(x => x.id === openId) ?? null : null
+  const bill = billId ? db.occurrences.find(o => o.id === billId) ?? null : null
   const share = fairness(db)
   const total = share.reduce((s, f) => s + f.done, 0)
 
@@ -68,7 +151,7 @@ export default function Tasks() {
       <div className="px-4 sm:px-6">
         <div className="flex items-center gap-2 h-11 px-3 rounded-lg border border-line bg-surface mb-3">
           <span className="text-faint">{Icon.plus(17)}</span>
-          <input value={draft} onChange={e => setDraft(e.target.value)}
+          <input ref={draftRef} value={draft} onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submit() }}
             placeholder="Нова задача — Enter, щоб додати"
             className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-faint" />
@@ -76,7 +159,7 @@ export default function Tasks() {
       </div>
 
       {GROUPS.map(g => {
-        const rows = sortTasks(visible.filter(x => x.status === g.status))
+        const rows = itemsFor(g.status)
         if (!rows.length) return null
         return (
           <section key={g.status} className="mt-4">
@@ -85,14 +168,29 @@ export default function Tasks() {
               <span className="text-[12px] text-faint num">{rows.length}</span>
             </div>
             <ul className="border-y border-line divide-y divide-line bg-surface">
-              {rows.map(t => <Row key={t.id} task={t} onOpen={() => setOpenId(t.id)} />)}
+              {rows.map(it => it.kind === 'task'
+                ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
             </ul>
           </section>
         )
       })}
 
-      {visible.filter(x => x.status !== 'done').length === 0 && (
-        <Empty>Порожньо. Це або перемога, або нікуди не записали.</Empty>
+      {beyond > 0 && (
+        <div className="px-4 sm:px-6 mt-2 text-[12.5px] text-faint">
+          Ще <span className="num">{beyond}</span> {plural(beyond, 'платіж', 'платежі', 'платежів')} далі —
+          {view === 'all' ? ' у розділі «Місяць».' : ' у вкладці «Всі».'}
+        </div>
+      )}
+
+      {openCount === 0 && (
+        <Empty>
+          <p className="mb-3">
+            Тут збираються побутові задачі й платежі, яким настав час.
+            Поки порожньо — нічого не горить.
+          </p>
+          <Btn onClick={() => draftRef.current?.focus()}>Додати задачу</Btn>
+        </Empty>
       )}
 
       {done.length > 0 && (
@@ -104,7 +202,9 @@ export default function Tasks() {
           </button>
           {showDone && (
             <ul className="border-y border-line divide-y divide-line bg-surface">
-              {done.slice(0, 30).map(t => <Row key={t.id} task={t} onOpen={() => setOpenId(t.id)} />)}
+              {done.slice(0, 30).map(it => it.kind === 'task'
+                ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
             </ul>
           )}
         </section>
@@ -133,8 +233,18 @@ export default function Tasks() {
       </section>
 
       <TaskSheet task={open} onClose={() => setOpenId(null)} />
+      <BillSheet occ={bill} onClose={() => setBillId(null)} />
     </div>
   )
+}
+
+function plural(n: number, one: string, few: string, many: string) {
+  const a = Math.abs(n) % 100
+  if (a > 10 && a < 20) return many
+  const b = a % 10
+  if (b === 1) return one
+  if (b >= 2 && b <= 4) return few
+  return many
 }
 
 function balanced(share: { done: number }[]) {
@@ -143,19 +253,39 @@ function balanced(share: { done: number }[]) {
   return share.every(s => s.done / total >= 0.4 && s.done / total <= 0.6)
 }
 
-function sortTasks(rows: Task[]) {
+function doneAt(it: Item) {
+  return it.kind === 'task'
+    ? it.task.completedAt ?? ''
+    : it.occ.paidOn ?? it.occ.dueDate
+}
+
+/**
+ * Один порядок для задач і платежів.
+ * priority === 0 — «не проставлений», іде ОСТАННІМ (інваріант 8).
+ * Платіж пріоритету не має і теж потрапляє в цей хвіст, але має дату,
+ * тому стає перед безстроковими задачами без пріоритету.
+ */
+function sortItems(rows: Item[]) {
+  const prio = (it: Item) => {
+    if (it.kind === 'bill') return 9
+    return it.task.priority === 0 ? 9 : it.task.priority
+  }
+  const due = (it: Item) => (it.kind === 'bill' ? it.occ.dueDate : it.task.dueDate)
+  const created = (it: Item) => (it.kind === 'bill' ? it.occ.dueDate : it.task.createdAt)
+
   return [...rows].sort((a, b) => {
-    // 0 = без пріоритету, завжди в кінці
-    const pa = a.priority === 0 ? 9 : a.priority
-    const pb = b.priority === 0 ? 9 : b.priority
+    const pa = prio(a), pb = prio(b)
     if (pa !== pb) return pa - pb
-    if (!!a.dueDate !== !!b.dueDate) return a.dueDate ? -1 : 1
-    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate)
-    return a.createdAt.localeCompare(b.createdAt)
+    const da = due(a), dbb = due(b)
+    if (!!da !== !!dbb) return da ? -1 : 1
+    if (da && dbb && da !== dbb) return da.localeCompare(dbb)
+    return created(a).localeCompare(created(b))
   })
 }
 
-function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
+/* ───────────────────────── рядки ───────────────────────── */
+
+function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const db = useDB()
   const member = db.members.find(m => m.id === task.assigneeId)
   const isDone = task.status === 'done'
@@ -201,9 +331,107 @@ function Row({ task, onOpen }: { task: Task; onOpen: () => void }) {
   )
 }
 
+/**
+ * Платіж у списку задач. Об'єкта Task для нього не існує — рядок зібраний
+ * з Occurrence просто зараз. Чекбокс викликає confirmOccurrence: воно саме
+ * створить витрату і, якщо план прив'язаний до фонду, списання з фонду.
+ */
+function BillRow({ occ, onOpen }: { occ: Occurrence; onOpen: () => void }) {
+  const db = useDB()
+  const member = db.members.find(m => m.id === occ.assigneeId)
+  const paid = occ.status === 'paid'
+  const skipped = occ.status === 'skipped'
+  const settled = paid || skipped
+  const due = relativeDue(occ.dueDate)
+
+  return (
+    <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11 group">
+      {settled ? (
+        <span className={`shrink-0 h-[18px] w-[18px] rounded-[5px] border grid place-items-center ${
+          paid ? 'bg-accent border-accent text-white' : 'border-line2 text-faint'}`}>
+          {paid ? Icon.check(12) : '—'}
+        </span>
+      ) : (
+        <button onClick={() => confirmOccurrence(occ.id)} aria-label="Оплачено"
+          className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent grid place-items-center transition-colors" />
+      )}
+
+      <span className="shrink-0 text-faint" title="Платіж">{Icon.wallet(15)}</span>
+
+      <button onClick={onOpen} className="flex-1 min-w-0 text-left">
+        <span className={`text-[14px] block truncate ${settled ? 'line-through text-faint' : ''}`}>{occ.name}</span>
+      </button>
+
+      <span className="shrink-0 hidden sm:block">
+        <Badge tone={due.tone === 'over' && !settled ? 'warn' : 'neutral'}>Платіж</Badge>
+      </span>
+
+      <span className={`shrink-0 text-[13.5px] num ${settled ? 'text-faint' : 'text-muted'}`}>
+        {money(settled ? occ.actualMinor ?? occ.expectedMinor : occ.expectedMinor, occ.currency)}
+      </span>
+
+      <span className={`shrink-0 text-[12px] num ${
+        settled ? 'text-faint'
+          : due.tone === 'over' ? 'text-warn font-medium'
+          : due.tone === 'today' ? 'text-warn' : 'text-faint'}`}>
+        {settled ? shortDate(occ.paidOn ?? occ.dueDate) : due.label}
+      </span>
+
+      <span className="shrink-0"><Avatar member={member} /></span>
+    </li>
+  )
+}
+
+/* ───────────────────────── листи ───────────────────────── */
+
+function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => void }) {
+  const db = useDB()
+  if (!occ) return null
+  const envelope = db.envelopes.find(e => e.id === occ.envelopeId)
+  const member = db.members.find(m => m.id === occ.assigneeId)
+  const settled = occ.status === 'paid' || occ.status === 'skipped'
+  const due = relativeDue(occ.dueDate)
+
+  return (
+    <Sheet open={!!occ} onClose={onClose} title="Платіж">
+      <div className="flex items-baseline justify-between gap-3 mb-1">
+        <span className="text-[16px] font-medium">{occ.name}</span>
+        <span className="text-[18px] num">{money(occ.actualMinor ?? occ.expectedMinor, occ.currency)}</span>
+      </div>
+      <div className="text-[12.5px] text-faint mb-4">
+        <span className="num">{shortDate(occ.dueDate)}</span>
+        {!settled && due.tone === 'over' && <span className="text-warn"> · прострочено</span>}
+        {occ.status === 'paid' && <span> · оплачено</span>}
+        {occ.status === 'skipped' && <span> · пропущено</span>}
+        {envelope && <span> · {envelope.name}</span>}
+        {member && <span> · {member.name}</span>}
+      </div>
+
+      {settled ? (
+        <div className="text-[13px] text-faint">
+          Змінити суму або скасувати підтвердження можна в розділі «Місяць».
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-2">
+            <Btn variant="primary" full onClick={() => { confirmOccurrence(occ.id); onClose() }}>Оплачено</Btn>
+            <Btn onClick={() => { skipOccurrence(occ.id); onClose() }}>Пропустити</Btn>
+          </div>
+          <div className="text-[12px] text-faint mt-2">
+            Підтвердження запише витрату в конверт, а якщо платіж фінансує фонд — і списання з нього.
+            Пропуск лишає платіж в історії зі статусом «пропущено».
+          </div>
+        </>
+      )}
+    </Sheet>
+  )
+}
+
 function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }) {
   const db = useDB()
   if (!task) return null
+  const areas = knownAreas(db)
+
   return (
     <Sheet open={!!task} onClose={onClose} title="Задача">
       <input value={task.title} onChange={e => updateTask(task.id, { title: e.target.value })}
@@ -240,43 +468,61 @@ function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }
         </div>
       </Field>
 
-      <Field label="Дедлайн">
-        <input type="date" value={task.dueDate ?? ''}
-          onChange={e => updateTask(task.id, { dueDate: e.target.value || undefined })}
-          className="h-10 px-3 rounded-lg border border-line bg-surface text-[14px]" />
+      {/* складність — валюта балансу навантаження і вхід у ротацію least_loaded */}
+      <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач.">
+        <Segmented full value={String(task.effort) as '1' | '2' | '3'} items={EFFORTS}
+          onChange={v => updateTask(task.id, { effort: Number(v) as 1 | 2 | 3 })} />
       </Field>
 
-      <Field label="Відкласти до">
-        <input type="date" value={task.deferUntil ?? ''}
-          onChange={e => updateTask(task.id, { deferUntil: e.target.value || undefined })}
-          className="h-10 px-3 rounded-lg border border-line bg-surface text-[14px]" />
+      <Field label="Зона" htmlFor="task-area">
+        <Input id="task-area" value={task.area ?? ''} placeholder="Кухня, авто, документи…"
+          onChange={v => updateTask(task.id, { area: v.trim() ? v : undefined })} />
+        {areas.length > 0 && (
+          <div className="flex gap-1 flex-wrap mt-1.5">
+            {areas.map(a => (
+              <Pill key={a} active={task.area === a}
+                onClick={() => updateTask(task.id, { area: task.area === a ? undefined : a })}>{a}</Pill>
+            ))}
+          </div>
+        )}
+      </Field>
+
+      <Field label="Нотатка" htmlFor="task-notes">
+        <Textarea id="task-notes" value={task.notes ?? ''} placeholder="Деталі, посилання, що саме треба"
+          onChange={v => updateTask(task.id, { notes: v.trim() ? v : undefined })} />
+      </Field>
+
+      <Field label="Дедлайн" htmlFor="task-due">
+        <DateInput id="task-due" value={task.dueDate}
+          onChange={v => updateTask(task.id, { dueDate: v })} />
+      </Field>
+
+      <Field label="Відкласти до" htmlFor="task-defer">
+        <DateInput id="task-defer" value={task.deferUntil}
+          onChange={v => updateTask(task.id, { deferUntil: v })} />
       </Field>
 
       <div className="flex gap-2 mt-4">
         <Btn variant="primary" full onClick={() => { completeTask(task.id); onClose() }}>
           {task.status === 'done' ? 'Повернути в роботу' : 'Виконано'}
         </Btn>
-        <Btn variant="danger" onClick={() => { updateTask(task.id, { status: 'dropped' }); onClose() }}>Прибрати</Btn>
+        <Btn onClick={() => { updateTask(task.id, { status: 'dropped' }); onClose() }}>Прибрати</Btn>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-line flex items-center justify-between gap-3">
+        <span className="text-[12px] text-faint">
+          «Прибрати» ховає задачу зі списків. Видалення стирає її та підзадачі назавжди.
+        </span>
+        <ConfirmButton onConfirm={() => { deleteTask(task.id); onClose() }}>Видалити</ConfirmButton>
       </div>
     </Sheet>
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-3">
-      <div className="text-[11.5px] uppercase tracking-wider text-faint mb-1.5">{label}</div>
-      {children}
-    </div>
-  )
-}
-
-function Pill({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick}
-      className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[13px] border transition-colors ${
-        active ? 'border-accent text-accent bg-accentSoft' : 'border-line text-muted hover:bg-surface2'}`}>
-      {children}
-    </button>
-  )
+/** Зони, які вже вживаються — щоб не вигадувати нову назву щоразу. */
+function knownAreas(db: DB): string[] {
+  const set = new Set<string>()
+  db.tasks.forEach(t => { if (t.area && t.status !== 'dropped') set.add(t.area) })
+  db.taskTemplates.forEach(t => { if (t.area) set.add(t.area) })
+  return [...set].sort((a, b) => a.localeCompare(b, 'uk'))
 }

@@ -1,14 +1,22 @@
 import { useState } from 'react'
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { Icon } from './components/ui'
+import { Avatar, Icon } from './components/ui'
 import { QuickAdd } from './components/QuickAdd'
-import { useDB } from './data/store'
+import { useDB, setMe } from './data/store'
 import Today from './pages/Today'
 import Tasks from './pages/Tasks'
 import Month from './pages/Month'
 import Shopping from './pages/Shopping'
 import Funds from './pages/Funds'
 import Debts from './pages/Debts'
+import History from './pages/History'
+import Settings from './pages/Settings'
+import SettingsEnvelopes from './pages/SettingsEnvelopes'
+import SettingsPlans from './pages/SettingsPlans'
+import SettingsFunds from './pages/SettingsFunds'
+import SettingsDebts from './pages/SettingsDebts'
+import SettingsChores from './pages/SettingsChores'
+import SettingsFamily from './pages/SettingsFamily'
 
 const NAV = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
@@ -16,6 +24,12 @@ const NAV = [
   { to: '/month',    label: 'Місяць',   icon: Icon.wallet },
   { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
   { to: '/funds',    label: 'Фонди',    icon: Icon.piggy },
+]
+
+const SECONDARY = [
+  { to: '/debts',    label: 'Борги',        icon: Icon.list },
+  { to: '/history',  label: 'Історія',      icon: Icon.clock },
+  { to: '/settings', label: 'Налаштування', icon: Icon.gear },
 ]
 
 export default function App() {
@@ -39,8 +53,15 @@ export default function App() {
       <aside className="hidden sm:flex flex-col w-[212px] shrink-0 border-r border-line px-3 py-4 gap-1">
         <div className="px-2 pb-4">
           <div className="text-[15px] font-semibold tracking-tight">Family Flow</div>
-          <div className="text-[12px] text-faint">
-            {db.members.map(m => m.name).join(' і ')}
+          <div className="flex items-center gap-1 mt-1.5">
+            {db.members.map(m => (
+              <button key={m.id} onClick={() => setMe(m.id)} title={`Записувати як ${m.name}`}
+                className={`inline-flex items-center gap-1.5 h-7 pl-0.5 pr-2 rounded-full border transition-colors ${
+                  db.meId === m.id ? 'border-accent bg-accentSoft text-accentInk' : 'border-transparent text-faint hover:bg-surface2'}`}>
+                <Avatar member={m} size={20} />
+                <span className="text-[11.5px]">{m.name}</span>
+              </button>
+            ))}
           </div>
         </div>
         {NAV.map(n => (
@@ -51,11 +72,13 @@ export default function App() {
             {n.to === '/shopping' && cart > 0 && <span className="ml-auto text-[12px] text-faint num">{cart}</span>}
           </NavLink>
         ))}
-        <NavLink to="/debts"
-          className={({ isActive }) => `flex items-center gap-2.5 h-9 px-2 rounded-lg text-[14px] transition-colors ${
-            isActive ? 'bg-surface2 text-ink font-medium' : 'text-muted hover:text-ink hover:bg-surface2/60'}`}>
-          <span className="shrink-0">{Icon.list(18)}</span>Борги
-        </NavLink>
+        {SECONDARY.map(n => (
+          <NavLink key={n.to} to={n.to}
+            className={({ isActive }) => `flex items-center gap-2.5 h-9 px-2 rounded-lg text-[14px] transition-colors ${
+              isActive ? 'bg-surface2 text-ink font-medium' : 'text-muted hover:text-ink hover:bg-surface2/60'}`}>
+            <span className="shrink-0">{n.icon(18)}</span>{n.label}
+          </NavLink>
+        ))}
 
         <div className="mt-auto flex items-center gap-1 px-1">
           <button onClick={toggleTheme} className="h-9 w-9 grid place-items-center rounded-lg text-muted hover:bg-surface2"
@@ -76,13 +99,21 @@ export default function App() {
           <Route path="/shopping" element={<Shopping />} />
           <Route path="/funds" element={<Funds />} />
           <Route path="/debts" element={<Debts />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/envelopes" element={<SettingsEnvelopes />} />
+          <Route path="/settings/plans" element={<SettingsPlans />} />
+          <Route path="/settings/funds" element={<SettingsFunds />} />
+          <Route path="/settings/debts" element={<SettingsDebts />} />
+          <Route path="/settings/chores" element={<SettingsChores />} />
+          <Route path="/settings/family" element={<SettingsFamily />} />
         </Routes>
       </main>
 
       {/* мобільний таб-бар */}
       <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-surface/95 backdrop-blur border-t border-line safe-b">
-        <div className="grid grid-cols-5">
-          {NAV.map(n => {
+        <div className="grid grid-cols-6">
+          {[...NAV, { to: '/settings', label: 'Ще', icon: Icon.gear }].map(n => {
             const active = n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to)
             return (
               <NavLink key={n.to} to={n.to} end={n.to === '/'}

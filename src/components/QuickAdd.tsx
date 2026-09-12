@@ -1,20 +1,32 @@
 import { useMemo, useState } from 'react'
-import { Sheet, Btn } from './ui'
+import { Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet } from '../ui'
 import { useDB, addEntry } from '../data/store'
-import { money, parseAmount } from '../lib/money'
-import type { Currency } from '../data/types'
+import { SYMBOL, money, parseAmount } from '../lib/money'
+import type { Currency, EntryKind } from '../data/types'
 import { monthKey, today } from '../lib/dates'
 
-const KEYS = ['1','2','3','4','5','6','7','8','9',',','0','⌫']
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', '⌫']
+type Kind = Extract<EntryKind, 'expense' | 'income'>
 
 export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
   const db = useDB()
+  const [kind, setKind] = useState<Kind>('expense')
   const [raw, setRaw] = useState('')
   const [currency, setCurrency] = useState<Currency>('UAH')
-  const spendable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
-  const [envelopeId, setEnvelopeId] = useState(spendable[4]?.id ?? spendable[0].id)
+  const [note, setNote] = useState('')
+  const [date, setDate] = useState<string | undefined>(today())
 
-  // шаблони: найчастіші пари (конверт, сума) за 60 днів
+  const spendable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
+  const incoming = db.envelopes.filter(e => e.kind === 'income' && !e.archived)
+  // конверт запам'ятовується окремо для кожного типу: списки не перетинаються
+  const [expenseEnv, setExpenseEnv] = useState(spendable[4]?.id ?? spendable[0]?.id ?? '')
+  const [incomeEnv, setIncomeEnv] = useState(incoming[0]?.id ?? '')
+
+  const envelopes = kind === 'income' ? incoming : spendable
+  const envelopeId = kind === 'income' ? incomeEnv : expenseEnv
+  const setEnvelopeId = kind === 'income' ? setIncomeEnv : setExpenseEnv
+
+  // шаблони: найчастіші пари (конверт, сума) з історії витрат
   const presets = useMemo(() => {
     const counts = new Map<string, { envelopeId: string; amount: number; n: number }>()
     for (const e of db.entries) {
@@ -34,57 +46,82 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
   }
   const submit = () => {
     if (!minor) return
-    addEntry({ kind: 'expense', amountMinor: minor, currency, envelopeId })
-    setRaw(''); onClose()
+    addEntry({
+      kind,
+      amountMinor: minor,
+      currency,
+      envelopeId: envelopeId || undefined,
+      note: note.trim() || undefined,
+      occurredOn: date || today(),
+    })
+    setRaw(''); setNote(''); setDate(today())
+    onClose()
   }
 
-  const spentThis = db.entries
-    .filter(e => e.kind === 'expense' && e.envelopeId === envelopeId && monthKey(e.occurredOn) === monthKey(today()))
+  // підсумок за місяць вибраної дати, а не завжди за поточний
+  const month = monthKey(date || today())
+  const sumThis = db.entries
+    .filter(e => e.kind === kind && monthKey(e.occurredOn) === month
+      && (kind === 'income' || e.envelopeId === envelopeId))
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
   return (
-    <Sheet open={open} onClose={onClose} title="Витрата">
+    <Sheet open={open} onClose={onClose} title={kind === 'income' ? 'Дохід' : 'Витрата'}>
+      <Segmented value={kind} onChange={setKind} full label="Тип запису" items={[
+        { value: 'expense', label: 'Витрата' },
+        { value: 'income', label: 'Дохід' },
+      ]} />
+
       <div className="text-center py-3">
         <div className="text-[34px] font-semibold num tracking-tight">
           {raw ? `${raw} ` : <span className="text-faint">0 </span>}
-          <span className="text-muted text-[24px]">{currency === 'UAH' ? '₴' : currency === 'USD' ? '$' : '€'}</span>
+          <span className="text-muted text-[24px]">{SYMBOL[currency]}</span>
         </div>
         <div className="text-[12.5px] text-faint mt-0.5">
-          у цьому місяці на цей конверт — {money(spentThis)}
+          {kind === 'income'
+            ? <>дохід цього місяця — {money(sumThis)}</>
+            : <>у цьому місяці на цей конверт — {money(sumThis)}</>}
         </div>
       </div>
 
-      {presets.length > 0 && !raw && (
+      {kind === 'expense' && presets.length > 0 && !raw && (
         <div className="flex gap-1.5 flex-wrap justify-center mb-3">
           {presets.map((p, i) => {
             const env = db.envelopes.find(e => e.id === p.envelopeId)
             return (
-              <button key={i} onClick={() => { setEnvelopeId(p.envelopeId); setRaw(String(p.amount / 100)) }}
-                className="h-8 px-2.5 rounded-lg border border-line text-[12.5px] text-muted hover:bg-surface2">
-                {env?.name} · <span className="num">{p.amount / 100}</span>
-              </button>
+              <Pill key={i} onClick={() => { setExpenseEnv(p.envelopeId); setRaw(String(p.amount / 100)) }}
+                title={`${env?.name}, ${money(p.amount)}`}>
+                <span className="text-[12.5px]">{env?.name} · <span className="num">{p.amount / 100}</span></span>
+              </Pill>
             )
           })}
         </div>
       )}
 
-      <select value={envelopeId} onChange={e => setEnvelopeId(e.target.value)}
-        className="w-full h-11 rounded-lg border border-line bg-surface px-3 text-[14px] mb-2">
-        {spendable.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-      </select>
+      <div className="mb-2">
+        <Select value={envelopeId} onChange={setEnvelopeId}
+          options={envelopes.map(e => ({ value: e.id, label: e.name }))}
+          placeholder={envelopes.length ? undefined : 'Конвертів немає'} />
+      </div>
 
-      <div className="flex gap-1.5 mb-3">
+      <div className="flex gap-1.5 mb-2 items-center flex-wrap">
         {(['UAH', 'USD', 'EUR'] as Currency[]).map(c => (
-          <button key={c} onClick={() => setCurrency(c)}
-            className={`h-8 px-3 rounded-lg text-[13px] border ${currency === c ? 'border-accent text-accent bg-accentSoft' : 'border-line text-muted'}`}>
-            {c}
-          </button>
+          <Pill key={c} active={currency === c} onClick={() => setCurrency(c)}>{c}</Pill>
         ))}
         {currency !== 'UAH' && (
-          <span className="self-center text-[12px] text-faint num ml-1">
+          <span className="text-[12px] text-faint num ml-1">
             курс {db.rates[currency]} → {minor ? money(Math.round(minor * db.rates[currency])) : '—'}
           </span>
         )}
+      </div>
+
+      <div className="grid grid-cols-[1fr_auto] gap-2 items-start">
+        <Field label="Нотатка" htmlFor="qa-note">
+          <Input id="qa-note" value={note} onChange={setNote} placeholder="Необов’язково" onEnter={submit} />
+        </Field>
+        <Field label="Дата" htmlFor="qa-date">
+          <DateInput id="qa-date" value={date} onChange={setDate} />
+        </Field>
       </div>
 
       <div className="grid grid-cols-3 gap-1.5">
