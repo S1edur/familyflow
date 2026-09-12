@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Avatar, Icon, SectionTitle } from '../ui'
 import { useDB, setMe } from '../data/store'
+import { AccountCard } from '../components/AccountCard'
 
 /**
  * «Ще» — це хаб навігації, а не місце, де налаштовують сутності.
@@ -20,6 +21,8 @@ export default function Settings() {
 
   return (
     <div className="max-w-[760px] mx-auto">
+      <AccountCard />
+
       <SectionTitle>Зараз записує</SectionTitle>
       <div className="px-4 sm:px-6">
         <div className="flex gap-1.5">
