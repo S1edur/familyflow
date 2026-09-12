@@ -37,6 +37,7 @@ sql/03_functions.sql     генерація платежів і задач, вʼ
 sql/04_cron.sql          pg_cron, нічна генерація
 sql/05_seed.sql          стартові конверти
 sql/06_attachments.sql   приватний бакет + RLS на файли
+sql/07_sync.sql          updated_at і deleted_at під офлайн-синхронізацію
 ```
 
 Виконувати по порядку в SQL Editor Supabase. **Не давати агенту генерувати

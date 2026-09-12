@@ -2,6 +2,22 @@
 // зміниться тільки шар доступу — ці форми лишаються.
 
 export type ID = string
+
+/**
+ * Поля синхронізації. Дзеркалять sql/07_sync.sql.
+ *
+ * Необовʼязкові навмисно: локальне сховище їх ще не заповнює, і поки
+ * синхронізації немає, застосунок працює без них так само. Заповнювати
+ * почне шар синхронізації — тоді ж хард-делети перейдуть у deletedAt.
+ *
+ * updatedAt — на чому стоїть «останній запис виграє».
+ * deletedAt — мітка видалення: без неї видалення на офлайновому пристрої
+ * не доїде до іншого, і рядок воскресне при наступній синхронізації.
+ */
+export interface Synced {
+  updatedAt?: string
+  deletedAt?: string
+}
 export type Currency = 'UAH' | 'USD' | 'EUR'
 
 export type EnvelopeKind =
@@ -21,7 +37,7 @@ export interface Member {
   initials: string
 }
 
-export interface Envelope {
+export interface Envelope extends Synced {
   id: ID
   name: string
   kind: EnvelopeKind
@@ -30,7 +46,7 @@ export interface Envelope {
   archived?: boolean
 }
 
-export interface PlanLine {
+export interface PlanLine extends Synced {
   envelopeId: ID
   month: string         // '2026-09'
   plannedMinor: number
@@ -38,7 +54,7 @@ export interface PlanLine {
 
 export type Freq = 'monthly' | 'weekly' | 'yearly' | 'daily'
 
-export interface RecurringPlan {
+export interface RecurringPlan extends Synced {
   id: ID
   name: string
   envelopeId: ID
@@ -56,7 +72,7 @@ export interface RecurringPlan {
   active: boolean
 }
 
-export interface Occurrence {
+export interface Occurrence extends Synced {
   id: ID
   planId?: ID
   envelopeId: ID
@@ -72,7 +88,7 @@ export interface Occurrence {
   note?: string
 }
 
-export interface Entry {
+export interface Entry extends Synced {
   id: ID
   kind: EntryKind
   occurredOn: string
@@ -89,7 +105,7 @@ export interface Entry {
   createdBy: ID
 }
 
-export interface Fund {
+export interface Fund extends Synced {
   id: ID
   name: string
   kind: FundKind
@@ -103,7 +119,7 @@ export interface Fund {
   archived?: boolean
 }
 
-export interface Debt {
+export interface Debt extends Synced {
   id: ID
   name: string
   counterparty?: string
@@ -115,7 +131,7 @@ export interface Debt {
   closedOn?: string
 }
 
-export interface TaskTemplate {
+export interface TaskTemplate extends Synced {
   id: ID
   title: string
   area?: string
@@ -131,7 +147,7 @@ export interface TaskTemplate {
   active: boolean
 }
 
-export interface Task {
+export interface Task extends Synced {
   id: ID
   templateId?: ID
   occurrenceKey?: string
@@ -151,7 +167,7 @@ export interface Task {
   completedBy?: ID
 }
 
-export interface ShoppingItem {
+export interface ShoppingItem extends Synced {
   id: ID
   name: string
   qty?: string
@@ -163,7 +179,7 @@ export interface ShoppingItem {
   tripId?: ID
 }
 
-export interface Trip {
+export interface Trip extends Synced {
   id: ID
   store?: string
   shoppedBy: ID
