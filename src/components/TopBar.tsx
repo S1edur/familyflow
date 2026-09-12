@@ -15,11 +15,6 @@ const TITLES: Record<string, string> = {
   '/debts': 'Борги',
   '/history': 'Історія',
   '/settings': 'Ще',
-  '/settings/envelopes': 'Конверти',
-  '/settings/plans': 'Регулярні платежі',
-  '/settings/funds': 'Фонди',
-  '/settings/debts': 'Борги',
-  '/settings/chores': 'Побутові задачі',
   '/settings/family': "Сім'я і валюти",
 }
 

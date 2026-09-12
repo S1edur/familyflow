@@ -12,11 +12,6 @@ import Funds from './pages/Funds'
 import Debts from './pages/Debts'
 import History from './pages/History'
 import Settings from './pages/Settings'
-import SettingsEnvelopes from './pages/SettingsEnvelopes'
-import SettingsPlans from './pages/SettingsPlans'
-import SettingsFunds from './pages/SettingsFunds'
-import SettingsDebts from './pages/SettingsDebts'
-import SettingsChores from './pages/SettingsChores'
 import SettingsFamily from './pages/SettingsFamily'
 
 const NAV = [
@@ -133,11 +128,6 @@ export default function App() {
           <Route path="/debts" element={<Debts />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/settings/envelopes" element={<SettingsEnvelopes />} />
-          <Route path="/settings/plans" element={<SettingsPlans />} />
-          <Route path="/settings/funds" element={<SettingsFunds />} />
-          <Route path="/settings/debts" element={<SettingsDebts />} />
-          <Route path="/settings/chores" element={<SettingsChores />} />
           <Route path="/settings/family" element={<SettingsFamily />} />
         </Routes>
       </main>
