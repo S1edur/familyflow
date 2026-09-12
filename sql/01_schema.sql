@@ -124,7 +124,7 @@ create table recurring_plans (
   assignee_id           uuid references profiles(id),
   autoconfirm           boolean not null default false,  -- автосписання: підтверджувати автоматично
   fund_id               uuid,          -- FK нижче: фонд, який фінансує цей платіж
-  debt_id               uuid references debts(id) on delete set null,  -- борг, який цей платіж гасить
+  debt_id               uuid,          -- FK нижче: борг, який цей платіж гасить
   is_active             boolean not null default true,
   created_at            timestamptz not null default now()
 );
@@ -196,6 +196,11 @@ create table debts (
   created_at            timestamptz not null default now()
 );
 create index on debts (household_id, closed_on);
+
+-- Відкладений ключ: recurring_plans оголошується вище за debts,
+-- тож посилання inline дало б "relation debts does not exist".
+alter table recurring_plans add constraint recurring_plans_debt_fk
+  foreign key (debt_id) references debts(id) on delete set null;
 
 -- ------------------------------------- 9. ЄДИНА ТАБЛИЦЯ РУХУ ГРОШЕЙ --
 -- Усі фактичні гроші проходять сюди: витрати, доходи, внески у фонди,
