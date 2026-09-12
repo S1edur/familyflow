@@ -228,11 +228,14 @@ export function fundStatus(d: DB, fundId: ID) {
   // Початок накопичення беремо з ПЕРШОГО внеску, а не вигадуємо.
   // У Fund немає дати старту, і раніше тут припускалося, що фонд почали рівно
   // 12 місяців тому — через що щойно створений фонд одразу отримував «відстаємо».
-  const firstIn = d.entries
-    .filter(e => e.fundId === fundId && e.kind === 'fund_in')
-    .map(e => e.occurredOn)
-    .sort()[0]
-  const span = firstIn && f.dueDate ? monthsUntil(f.dueDate, firstIn) : 0
+  const mine = d.entries.filter(e => e.fundId === fundId)
+  // Початок ПОТОЧНОГО циклу: остання виплата, а якщо виплат ще не було —
+  // найперший внесок. Інакше після виплати цикл міряється від внеску
+  // дворічної давнини, і щойно спорожнілий фонд одразу «відстає».
+  const lastOut = mine.filter(e => e.kind === 'fund_out').map(e => e.occurredOn).sort().pop()
+  const firstIn = mine.filter(e => e.kind === 'fund_in').map(e => e.occurredOn).sort()[0]
+  const cycleStart = lastOut ?? firstIn
+  const span = cycleStart && f.dueDate ? monthsUntil(f.dueDate, cycleStart) : 0
   const elapsed = span > 0 ? Math.max(0, Math.min(1, 1 - (monthsLeft - 1) / span)) : 0
   // ще жодного внеску → нічого не почалось, докоряти нема за що
   const onTrack = !target || balance >= target * elapsed
@@ -453,6 +456,23 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
         rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
         fundId: plan.fundId, occurrenceId: o.id, note: o.name, createdBy: d.meId,
       })
+
+      // Фонд відпрацював цикл — переносимо ціль на наступний платіж цього плану.
+      // Без цього страховка, оплачена в лютому, назавжди лишає фонду лютневу
+      // дату: monthsUntil затискається в 1, і фонд щомісяця вимагає весь
+      // залишок цілі, а «відстаємо» не згасає ніколи.
+      // sql/ робить те саме через funds.on_payout = 'refill'.
+      const fund = d.funds.find(x => x.id === plan.fundId)
+      if (fund?.dueDate) {
+        // Рахуємо з РОЗКЛАДУ, а не з уже згенерованих платежів: горизонт
+        // генерації 13 місяців, тож у річного плану наступної дати там
+        // просто немає — а саме річні фонди це й стосується найбільше.
+        const next = expandDates(
+          plan.freq, plan.byMonthDay, plan.byDay, plan.byMonth, plan.anchorDate,
+          addDays(o.dueDate, 1), addDays(o.dueDate, 400),
+        )[0]
+        if (next) fund.dueDate = next
+      }
     }
     // змінна сума → наступне очікування = медіана останніх шести
     if (plan?.amountMode === 'variable') {

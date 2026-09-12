@@ -452,7 +452,7 @@ function Formula({ fund, balance, target, monthsLeft, required }: {
   return (
     <div className="text-[12px] text-faint mt-1.5 leading-relaxed">
       <div className="num">
-        ({money(target, c)} − {money(balance, c)}) ÷ {monthsLeft} = {money(required, c)}
+        ({money(target, c)} {balance < 0 ? '+' : '−'} {money(Math.abs(balance), c)}) ÷ {monthsLeft} = {money(required, c)}
       </div>
       {fund.bufferPct ? (
         <div>
@@ -506,7 +506,7 @@ function Explain({ draft, balance, preview }: {
       )}
       <div>треба цього місяця = (ціль − зібрано) ÷ місяців, що лишились</div>
       <div className="num">
-        ({money(target, c)} − {money(balance, c)}) ÷ {monthsLeft} =
+        ({money(target, c)} {balance < 0 ? '+' : '−'} {money(Math.abs(balance), c)}) ÷ {monthsLeft} =
         <span className="text-ink font-medium"> {money(required, c)}</span>
       </div>
       <div className="text-faint mt-1">
