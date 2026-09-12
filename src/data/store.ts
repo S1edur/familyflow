@@ -9,6 +9,7 @@ import {
 } from '../lib/dates'
 import { money, toBase } from '../lib/money'
 import { pullAll, pullRates, pushDiff, pushMembers, pushRates } from './sync'
+import { drop, enqueue, peek, queueSize, clearQueue } from './queue'
 
 const KEY = 'familyflow.v1'
 const HORIZON_MONTHS = 13
@@ -35,20 +36,51 @@ let householdId: ID | null = null
 
 /** Останнє повідомлення про невдалу відправку — щоб не сипати однаковими. */
 let lastPushError = ''
+let draining = false
 
 function push(before: DB) {
   if (!householdId) return
+  enqueue(before, db)
+  void drain()
+}
+
+/**
+ * Спорожнює чергу по одному, СТРОГО по порядку: пізніша зміна може
+ * спиратись на ранішу, тож паралельна відправка переплутала б їх.
+ * Перший невдалий елемент зупиняє прохід — решта чекає наступної спроби.
+ */
+export async function drain(): Promise<void> {
+  if (draining || !householdId) return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+  draining = true
   const h = householdId
-  const after = db
-  void Promise.all([
-    pushDiff(before, after, h),
-    pushMembers(before.members, after.members, h, after.meId),
-    pushRates(before.rates, after.rates),
-  ]).catch((e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg === lastPushError) return
-    lastPushError = msg
-    console.error('Не вдалось відправити зміни:', msg)
+  try {
+    for (let item = peek(); item; item = peek()) {
+      try {
+        await pushDiff(item.before, item.after, h)
+        await pushMembers(item.before.members, item.after.members, h, item.after.meId)
+        await pushRates(item.before.rates, item.after.rates)
+        drop(item.id)
+        lastPushError = ''
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg !== lastPushError) {
+          lastPushError = msg
+          console.error(`Зміни чекають на відправку (${queueSize()}):`, msg)
+        }
+        break
+      }
+    }
+  } finally {
+    draining = false
+  }
+}
+
+if (typeof window !== 'undefined') {
+  // мережа повернулась або вкладку знову побачили — пробуємо ще раз
+  window.addEventListener('online', () => void drain())
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void drain()
   })
 }
 
@@ -80,6 +112,7 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   // Інший дім, ніж бачив цей браузер → демо-дані геть, щоб не змішувались
   if (bound !== id) {
     db = { ...emptyDB(), members, meId }
+    clearQueue()   // черга належала попередньому дому — у новий їй не можна
     try { localStorage.setItem(BOUND_KEY, id) } catch { /* приватний режим */ }
   }
 

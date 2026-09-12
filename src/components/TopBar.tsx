@@ -3,6 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Empty, Icon, SectionTitle, Sheet, toast } from '../ui'
 import { useDB, setMe, notices } from '../data/store'
 import { readSeenAt, writeSeenAt } from '../lib/prefs'
+import { usePendingCount } from '../data/queue'
+import { drain } from '../data/store'
 
 /**
  * Назви екранів живуть тут, а не в самих сторінках: топ-бар забрав заголовки,
@@ -38,6 +40,7 @@ export function TopBar() {
   const title = TITLES[pathname] ?? 'Family Flow'
   const parent = TRAIL[pathname]
 
+  const pending = usePendingCount()
   const [open, setOpen] = useState(false)
   const [seenAt, setSeenAt] = useState(readSeenAt)
   const { fresh, soon } = notices(db, seenAt)
@@ -81,6 +84,17 @@ export function TopBar() {
           <h1 className="min-w-0 truncate text-[17px] font-semibold tight pl-2">{title}</h1>
         )}
         <span className="flex-1" />
+
+        {/* Черга не має бути чорною скринькою: якщо зміни не доїхали,
+            це видно, і тап пробує ще раз. */}
+        {pending > 0 && (
+          <button onClick={() => void drain()}
+            aria-label={`${pending} змін чекає на відправку, натисніть щоб спробувати ще раз`}
+            title="Зміни ще не відправлені. Натисніть, щоб спробувати ще раз."
+            className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-full bg-warnSoft text-warn text-[11.5px]">
+            {Icon.clock(13)}<span className="num">{pending}</span>
+          </button>
+        )}
 
         <button onClick={openPanel} aria-label={fresh.length ? `Повідомлення, нових ${fresh.length}` : 'Повідомлення'}
           className="relative h-9 w-9 shrink-0 grid place-items-center rounded-lg text-muted hover:bg-surface2">
