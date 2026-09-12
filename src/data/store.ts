@@ -1,5 +1,8 @@
 import { useSyncExternalStore } from 'react'
-import type { DB, Occurrence, Task, Currency, EntryKind, ID, Priority } from './types'
+import type {
+  DB, Occurrence, Task, Currency, EntryKind, ID, Priority,
+  Envelope, EnvelopeKind, Fund, Debt, RecurringPlan, TaskTemplate, Member, Rates,
+} from './types'
 import { seed } from './seed'
 import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, today,
@@ -191,10 +194,17 @@ export function fundStatus(d: DB, fundId: ID) {
   const required = f.monthlyFixedMinor
     ?? (target ? Math.max(0, Math.ceil((target - balance) / monthsLeft / 100) * 100) : 0)
   const progress = target ? Math.min(1, balance / target) : 0
-  // на графіку часу: скільки мало б бути зібрано на цей момент
-  const elapsed = f.dueDate && target
-    ? Math.max(0, Math.min(1, 1 - (monthsLeft - 1) / Math.max(1, monthsUntil(f.dueDate, iso(new Date(new Date().setMonth(new Date().getMonth() - 12)))))))
-    : 0
+  // Скільки мало б бути зібрано на цей момент.
+  // Початок накопичення беремо з ПЕРШОГО внеску, а не вигадуємо.
+  // У Fund немає дати старту, і раніше тут припускалося, що фонд почали рівно
+  // 12 місяців тому — через що щойно створений фонд одразу отримував «відстаємо».
+  const firstIn = d.entries
+    .filter(e => e.fundId === fundId && e.kind === 'fund_in')
+    .map(e => e.occurredOn)
+    .sort()[0]
+  const span = firstIn && f.dueDate ? monthsUntil(f.dueDate, firstIn) : 0
+  const elapsed = span > 0 ? Math.max(0, Math.min(1, 1 - (monthsLeft - 1) / span)) : 0
+  // ще жодного внеску → нічого не почалось, докоряти нема за що
   const onTrack = !target || balance >= target * elapsed
   return { fund: f, balance, target, monthsLeft, required, progress, onTrack }
 }
@@ -220,9 +230,17 @@ export function monthSummary(d: DB, month: string) {
     .filter(e => e.kind === 'income' && monthKey(e.occurredOn) === month)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
-  const obligationsLeft = d.occurrences
-    .filter(o => monthKey(o.dueDate) === month && (o.status === 'due' || o.status === 'projected'))
+  const monthOccurrences = d.occurrences.filter(o => monthKey(o.dueDate) === month)
+
+  const obligationsLeft = monthOccurrences
+    .filter(o => o.status === 'due' || o.status === 'projected')
     .reduce((s, o) => s + o.expectedMinor, 0)
+
+  // у «вільно» входять і вже оплачені: гроші пішли з рахунку, і рівняння
+  // не має про це забувати, інакше підтвердження платежу ЗБІЛЬШУЄ вільне
+  const obligationsAll = monthOccurrences
+    .filter(o => o.status !== 'skipped')
+    .reduce((s, o) => s + (o.status === 'paid' ? (o.actualMinor ?? o.expectedMinor) : o.expectedMinor), 0)
 
   const fundsRequired = d.funds
     .filter(f => !f.archived)
@@ -232,8 +250,9 @@ export function monthSummary(d: DB, month: string) {
     .filter(e => e.kind === 'expense' && monthKey(e.occurredOn) === month && !e.occurrenceId)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
-  const free = income - obligationsLeft - fundsRequired - spentVariable
-  return { income, obligationsLeft, fundsRequired, spentVariable, free }
+  const obligationsPaid = obligationsAll - obligationsLeft
+  const free = income - obligationsAll - fundsRequired - spentVariable
+  return { income, obligationsLeft, obligationsPaid, fundsRequired, spentVariable, free }
 }
 
 export function fairness(d: DB) {
@@ -357,11 +376,11 @@ export function completeTask(id: ID) {
 export function setPriority(id: ID, priority: Priority) { updateTask(id, { priority }) }
 export function setAssignee(id: ID, assigneeId?: ID) { updateTask(id, { assigneeId }) }
 
-export function addShoppingItem(name: string, category?: string) {
+export function addShoppingItem(name: string, opts: { qty?: string; category?: string } = {}) {
   mutate(d => {
     const prev = d.shoppingItems.find(i => i.name.toLowerCase() === name.toLowerCase() && i.category)
     d.shoppingItems.push({
-      id: uid(), name, category: category ?? prev?.category ?? 'Інше',
+      id: uid(), name, qty: opts.qty, category: opts.category ?? prev?.category ?? 'Інше',
       addedBy: d.meId, addedAt: new Date().toISOString(),
     })
   })
@@ -399,4 +418,236 @@ export function upcomingOccurrences(d: DB, days = 7): Occurrence[] {
   return d.occurrences
     .filter(o => (o.status === 'due' || o.status === 'projected') && o.dueDate <= to)
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+}
+
+/* ═══════════════════ налаштування: сім'я і курси ═══════════════════ */
+
+/** Хто зараз за кермом. Без цього всі дії пишуться на одну людину. */
+export function setMe(id: ID) {
+  mutate(d => { if (d.members.some(m => m.id === id)) d.meId = id })
+}
+
+export function addMember(input: { name: string; color: string; initials?: string }) {
+  mutate(d => {
+    d.members.push({
+      id: uid(), name: input.name, color: input.color,
+      initials: input.initials || input.name.slice(0, 1).toUpperCase(),
+    })
+  })
+}
+
+export function updateMember(id: ID, patch: Partial<Member>) {
+  mutate(d => { const m = d.members.find(x => x.id === id); if (m) Object.assign(m, patch) })
+}
+
+export function setRates(patch: Partial<Rates>) {
+  mutate(d => { Object.assign(d.rates, patch) })
+}
+
+/* ═══════════════════ конверти ═══════════════════ */
+
+export function addEnvelope(input: { name: string; kind: EnvelopeKind; ownerId?: ID }) {
+  mutate(d => {
+    const sortOrder = Math.max(0, ...d.envelopes.map(e => e.sortOrder)) + 10
+    d.envelopes.push({ id: uid(), name: input.name, kind: input.kind, ownerId: input.ownerId, sortOrder })
+  })
+}
+
+export function updateEnvelope(id: ID, patch: Partial<Envelope>) {
+  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) Object.assign(e, patch) })
+}
+
+/** Конверт не видаляємо — на нього дивляться історичні записи. Архівуємо. */
+export function archiveEnvelope(id: ID, archived = true) {
+  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) e.archived = archived })
+}
+
+export function reorderEnvelope(id: ID, sortOrder: number) {
+  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) e.sortOrder = sortOrder })
+}
+
+/* ═══════════════════ регулярні платежі ═══════════════════ */
+
+export function addRecurringPlan(input: Omit<RecurringPlan, 'id'>) {
+  mutate(d => { d.recurringPlans.push({ ...input, id: uid() }) })
+}
+
+export function updateRecurringPlan(id: ID, patch: Partial<RecurringPlan>) {
+  mutate(d => {
+    const p = d.recurringPlans.find(x => x.id === id)
+    if (!p) return
+    const reschedules = ['freq', 'byMonthDay', 'byDay', 'byMonth', 'anchorDate'].some(k => k in patch)
+    Object.assign(p, patch)
+    // розклад змінився → прибираємо ще не оплачені майбутні, materialize() згенерує заново
+    if (reschedules) {
+      const t = today()
+      d.occurrences = d.occurrences.filter(o =>
+        o.planId !== id || o.status === 'paid' || o.status === 'skipped' || o.dueDate < t)
+    }
+  })
+}
+
+/** План вимикаємо і прибираємо його майбутні неоплачені платежі. Історію лишаємо. */
+export function removeRecurringPlan(id: ID) {
+  mutate(d => {
+    const t = today()
+    d.recurringPlans = d.recurringPlans.filter(p => p.id !== id)
+    d.occurrences = d.occurrences.filter(o =>
+      o.planId !== id || o.status === 'paid' || o.status === 'skipped' || o.dueDate < t)
+  })
+}
+
+/* ═══════════════════ фонди ═══════════════════ */
+
+export function addFund(input: Omit<Fund, 'id' | 'priority'> & { priority?: number }) {
+  mutate(d => {
+    const priority = input.priority ?? Math.max(0, ...d.funds.map(f => f.priority)) + 10
+    d.funds.push({ ...input, priority, id: uid() })
+  })
+}
+
+export function updateFund(id: ID, patch: Partial<Fund>) {
+  mutate(d => { const f = d.funds.find(x => x.id === id); if (f) Object.assign(f, patch) })
+}
+
+export function archiveFund(id: ID, archived = true) {
+  mutate(d => { const f = d.funds.find(x => x.id === id); if (f) f.archived = archived })
+}
+
+/** Витрата з фонду напряму (не через прив'язаний регулярний платіж). */
+export function spendFromFund(fundId: ID, amountMinor: number, note?: string) {
+  mutate(d => {
+    const f = d.funds.find(x => x.id === fundId)
+    if (!f) return
+    const rate = f.currency === 'UAH' ? 1 : d.rates[f.currency]
+    d.entries.push({
+      id: uid(), kind: 'fund_out', occurredOn: today(), amountMinor, currency: f.currency,
+      rateToBase: rate, amountBaseMinor: Math.round(amountMinor * rate),
+      fundId, note, createdBy: d.meId,
+    })
+  })
+}
+
+/* ═══════════════════ борги ═══════════════════ */
+
+export function addDebt(input: Omit<Debt, 'id' | 'openedOn'> & { openedOn?: string }) {
+  mutate(d => { d.debts.push({ ...input, openedOn: input.openedOn ?? today(), id: uid() }) })
+}
+
+export function updateDebt(id: ID, patch: Partial<Debt>) {
+  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) Object.assign(x, patch) })
+}
+
+export function closeDebt(id: ID, closedOn?: string) {
+  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) x.closedOn = closedOn ?? today() })
+}
+
+export function reopenDebt(id: ID) {
+  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) x.closedOn = undefined })
+}
+
+/* ═══════════════════ шаблони побутових задач ═══════════════════ */
+
+export function addTaskTemplate(input: Omit<TaskTemplate, 'id'>) {
+  mutate(d => { d.taskTemplates.push({ ...input, id: uid() }) })
+}
+
+export function updateTaskTemplate(id: ID, patch: Partial<TaskTemplate>) {
+  mutate(d => { const t = d.taskTemplates.find(x => x.id === id); if (t) Object.assign(t, patch) })
+}
+
+/** Шаблон прибираємо разом із його ще не виконаними екземплярами. */
+export function removeTaskTemplate(id: ID) {
+  mutate(d => {
+    d.taskTemplates = d.taskTemplates.filter(t => t.id !== id)
+    d.tasks = d.tasks.filter(t => t.templateId !== id || t.status === 'done')
+  })
+}
+
+/* ═══════════════════ записи: правка і видалення ═══════════════════ */
+
+/** Сума/валюта змінились → курс перезаморожуємо на СЬОГОДНІ, решта полів як є. */
+export function updateEntry(id: ID, patch: Partial<{
+  amountMinor: number; currency: Currency; envelopeId: ID; note: string; occurredOn: string
+}>) {
+  mutate(d => {
+    const e = d.entries.find(x => x.id === id)
+    if (!e) return
+    Object.assign(e, patch)
+    if (patch.amountMinor != null || patch.currency != null) {
+      e.rateToBase = e.currency === 'UAH' ? 1 : d.rates[e.currency]
+      e.amountBaseMinor = Math.round(e.amountMinor * e.rateToBase)
+    }
+    // запис належить платежу → тримаємо факт по платежу в синхроні
+    if (e.occurrenceId && e.kind === 'expense') {
+      const o = d.occurrences.find(x => x.id === e.occurrenceId)
+      if (o) o.actualMinor = e.amountMinor
+    }
+  })
+}
+
+/** Видаляє запис. Якщо він був підтвердженням платежу — платіж повертається в «до оплати». */
+export function removeEntry(id: ID) {
+  mutate(d => {
+    const e = d.entries.find(x => x.id === id)
+    if (!e) return
+    if (e.occurrenceId) {
+      const oid = e.occurrenceId
+      d.entries = d.entries.filter(x => x.occurrenceId !== oid)   // разом із fund_out
+      const o = d.occurrences.find(x => x.id === oid)
+      if (o) {
+        o.status = o.dueDate <= today() ? 'due' : 'projected'
+        o.paidOn = undefined; o.actualMinor = undefined; o.paidBy = undefined
+      }
+      return
+    }
+    d.entries = d.entries.filter(x => x.id !== id)
+  })
+}
+
+/* ═══════════════════ платежі ═══════════════════ */
+
+/** Разовий платіж без регулярного плану. */
+export function addOccurrence(input: {
+  envelopeId: ID; name: string; dueDate: string; expectedMinor: number
+  currency?: Currency; assigneeId?: ID; note?: string
+}) {
+  mutate(d => {
+    d.occurrences.push({
+      id: uid(), envelopeId: input.envelopeId, name: input.name, dueDate: input.dueDate,
+      expectedMinor: input.expectedMinor, currency: input.currency ?? 'UAH',
+      status: input.dueDate <= today() ? 'due' : 'projected',
+      assigneeId: input.assigneeId, note: input.note,
+    })
+  })
+}
+
+/** Помилково підтвердили — відкотити разом зі створеними записами. */
+export function unconfirmOccurrence(id: ID) {
+  mutate(d => {
+    const o = d.occurrences.find(x => x.id === id)
+    if (!o) return
+    d.entries = d.entries.filter(e => e.occurrenceId !== id)
+    o.status = o.dueDate <= today() ? 'due' : 'projected'
+    o.paidOn = undefined; o.actualMinor = undefined; o.paidBy = undefined
+  })
+}
+
+export function unskipOccurrence(id: ID) {
+  mutate(d => {
+    const o = d.occurrences.find(x => x.id === id)
+    if (o && o.status === 'skipped') o.status = o.dueDate <= today() ? 'due' : 'projected'
+  })
+}
+
+/* ═══════════════════ покупки: правка ═══════════════════ */
+
+export function updateShoppingItem(id: ID, patch: Partial<{ name: string; qty: string; category: string }>) {
+  mutate(d => { const i = d.shoppingItems.find(x => x.id === id); if (i) Object.assign(i, patch) })
+}
+
+/* ═══════════════════ задачі: справжнє видалення ═══════════════════ */
+
+export function deleteTask(id: ID) {
+  mutate(d => { d.tasks = d.tasks.filter(t => t.id !== id && t.parentId !== id) })
 }
