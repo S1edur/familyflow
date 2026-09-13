@@ -13,7 +13,8 @@ import { drain } from '../data/store'
 const TITLES: Record<string, string> = {
   '/': 'Сьогодні',
   '/tasks': 'Задачі',
-  '/month': 'Місяць',
+  '/envelopes': 'Конверти',
+  '/bills': 'Платежі',
   '/shopping': 'Покупки',
   '/funds': 'Фонди і цілі',
   '/debts': 'Борги',

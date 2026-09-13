@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { Avatar, Icon, Toaster } from './components/ui'
 import { QuickAdd } from './components/QuickAdd'
 import Welcome from './pages/Welcome'
@@ -9,7 +9,8 @@ import { useDB, setMe } from './data/store'
 import { useAuth, useHousehold } from './data/auth'
 import Today from './pages/Today'
 import Tasks from './pages/Tasks'
-import Month from './pages/Month'
+import Envelopes from './pages/Envelopes'
+import Bills from './pages/Bills'
 import Shopping from './pages/Shopping'
 import Funds from './pages/Funds'
 import Debts from './pages/Debts'
@@ -20,7 +21,8 @@ import SettingsFamily from './pages/SettingsFamily'
 const NAV = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
   { to: '/tasks',    label: 'Задачі',   icon: Icon.check },
-  { to: '/month',    label: 'Місяць',   icon: Icon.wallet },
+  { to: '/envelopes', label: 'Конверти', icon: Icon.wallet },
+  { to: '/bills',     label: 'Платежі',  icon: Icon.clock },
   { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
   { to: '/funds',    label: 'Фонди',    icon: Icon.piggy },
 ]
@@ -59,6 +61,16 @@ function Tab({ n, path, cart }: {
       {n.label}
     </NavLink>
   )
+}
+
+/** Стара адреса `/month`: `?tab=bills` вела в чекліст, решта — у конверти. */
+function MonthRedirect() {
+  const { search } = useLocation()
+  const params = new URLSearchParams(search)
+  const bills = params.get('tab') === 'bills'
+  params.delete('tab')
+  const q = params.toString()
+  return <Navigate replace to={`${bills ? '/bills' : '/envelopes'}${q ? `?${q}` : ''}`} />
 }
 
 export default function App() {
@@ -142,7 +154,10 @@ function Shell() {
           <Route path="/tasks" element={<Tasks />} />
           {/* той самий список покупок, але як крок із задачі: своя назва і слід назад */}
           <Route path="/tasks/shopping" element={<Shopping />} />
-          <Route path="/month" element={<Month />} />
+          <Route path="/envelopes" element={<Envelopes />} />
+          <Route path="/bills" element={<Bills />} />
+          {/* «Місяць» розʼїхався на два екрани — старі посилання ведемо далі */}
+          <Route path="/month" element={<MonthRedirect />} />
           <Route path="/shopping" element={<Shopping />} />
           <Route path="/funds" element={<Funds />} />
           <Route path="/debts" element={<Debts />} />

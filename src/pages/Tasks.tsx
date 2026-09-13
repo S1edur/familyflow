@@ -2,8 +2,8 @@ import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, Input, LinkChip, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
-  Textarea, priorityLabel,
+  Icon, Input, LinkChip, OptionalFields, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
+  Textarea, priorityLabel, Rows,
 } from '../ui'
 import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
@@ -195,12 +195,12 @@ export default function Tasks() {
               <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium">{g.label}</h2>
               <span className="text-[12px] text-faint num">{rows.length}</span>
             </div>
-            <ul className="border-y border-line divide-y divide-line bg-surface">
+            <Rows>
               {rows.map(it =>
                 it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
                 : it.kind === 'shop' ? <ShopRow key={it.id} item={it} pinned={pinned} onTogglePin={togglePin} />
                 : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
-            </ul>
+            </Rows>
           </section>
         )
       })}
@@ -230,12 +230,12 @@ export default function Tasks() {
             Зроблено <span className="num">{done.length}</span>
           </button>
           {showDone && (
-            <ul className="border-y border-line divide-y divide-line bg-surface">
+            <Rows>
               {done.slice(0, 30).map(it =>
                 it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
                 : it.kind === 'shop' ? null
                 : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
-            </ul>
+            </Rows>
           )}
         </section>
       )}
@@ -520,7 +520,7 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
         <div className="text-[13px] text-faint">
           Змінити суму або скасувати підтвердження — у чеклісті місяця.
           <div className="mt-2">
-            <Btn onClick={() => nav('/month?tab=bills')}>Відкрити чекліст</Btn>
+            <Btn onClick={() => nav('/bills')}>Відкрити чекліст</Btn>
           </div>
         </div>
       ) : (
@@ -582,39 +582,65 @@ function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }
         </div>
       </Field>
 
-      {/* складність — валюта балансу навантаження і вхід у ротацію least_loaded */}
-      <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач.">
-        <Segmented full value={String(task.effort) as '1' | '2' | '3'} items={EFFORTS}
-          onChange={v => updateTask(task.id, { effort: Number(v) as 1 | 2 | 3 })} />
-      </Field>
+      {/* Решта задачі здебільшого порожня: дедлайн, зона, нотатка потрібні
+          одиницям. Порожніми полями вони читаються як список обовʼязків. */}
+      <OptionalFields items={[
+        { key: 'due', label: 'Дедлайн', filled: !!task.dueDate,
+          clear: () => updateTask(task.id, { dueDate: undefined }),
+          render: remove => (
+            <Field label="Дедлайн" htmlFor="task-due" onRemove={remove}>
+              <DateInput id="task-due" value={task.dueDate}
+                onChange={v => updateTask(task.id, { dueDate: v })} />
+            </Field>
+          ) },
 
-      <Field label="Зона" htmlFor="task-area">
-        <Input id="task-area" value={task.area ?? ''} placeholder="Кухня, авто, документи…"
-          onChange={v => updateTask(task.id, { area: v.trim() ? v : undefined })} />
-        {areas.length > 0 && (
-          <div className="flex gap-1 flex-wrap mt-1.5">
-            {areas.map(a => (
-              <Pill key={a} active={task.area === a}
-                onClick={() => updateTask(task.id, { area: task.area === a ? undefined : a })}>{a}</Pill>
-            ))}
-          </div>
-        )}
-      </Field>
+        { key: 'defer', label: 'Відкласти до', filled: !!task.deferUntil,
+          clear: () => updateTask(task.id, { deferUntil: undefined }),
+          render: remove => (
+            <Field label="Відкласти до" htmlFor="task-defer" onRemove={remove}>
+              <DateInput id="task-defer" value={task.deferUntil}
+                onChange={v => updateTask(task.id, { deferUntil: v })} />
+            </Field>
+          ) },
 
-      <Field label="Нотатка" htmlFor="task-notes">
-        <Textarea id="task-notes" value={task.notes ?? ''} placeholder="Деталі, посилання, що саме треба"
-          onChange={v => updateTask(task.id, { notes: v.trim() ? v : undefined })} />
-      </Field>
+        { key: 'area', label: 'Зона', filled: !!task.area,
+          clear: () => updateTask(task.id, { area: undefined }),
+          render: remove => (
+            <Field label="Зона" htmlFor="task-area" onRemove={remove}>
+              <Input id="task-area" value={task.area ?? ''} placeholder="Кухня, авто, документи…"
+                onChange={v => updateTask(task.id, { area: v.trim() ? v : undefined })} />
+              {areas.length > 0 && (
+                <div className="flex gap-1 flex-wrap mt-1.5">
+                  {areas.map(a => (
+                    <Pill key={a} active={task.area === a}
+                      onClick={() => updateTask(task.id, { area: task.area === a ? undefined : a })}>{a}</Pill>
+                  ))}
+                </div>
+              )}
+            </Field>
+          ) },
 
-      <Field label="Дедлайн" htmlFor="task-due">
-        <DateInput id="task-due" value={task.dueDate}
-          onChange={v => updateTask(task.id, { dueDate: v })} />
-      </Field>
+        { key: 'notes', label: 'Нотатка', filled: !!task.notes,
+          clear: () => updateTask(task.id, { notes: undefined }),
+          render: remove => (
+            <Field label="Нотатка" htmlFor="task-notes" onRemove={remove}>
+              <Textarea id="task-notes" value={task.notes ?? ''} placeholder="Деталі, посилання, що саме треба"
+                onChange={v => updateTask(task.id, { notes: v.trim() ? v : undefined })} />
+            </Field>
+          ) },
 
-      <Field label="Відкласти до" htmlFor="task-defer">
-        <DateInput id="task-defer" value={task.deferUntil}
-          onChange={v => updateTask(task.id, { deferUntil: v })} />
-      </Field>
+        // складність — валюта балансу навантаження і вхід у ротацію least_loaded.
+        // Значення є завжди, тож «порожньо» тут — це типова середня.
+        { key: 'effort', label: 'Складність', filled: task.effort !== 2,
+          clear: () => updateTask(task.id, { effort: 2 }),
+          render: remove => (
+            <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач."
+              onRemove={remove}>
+              <Segmented full value={String(task.effort) as '1' | '2' | '3'} items={EFFORTS}
+                onChange={v => updateTask(task.id, { effort: Number(v) as 1 | 2 | 3 })} />
+            </Field>
+          ) },
+      ]} />
 
       <div className="flex gap-2 mt-4">
         <Btn variant="primary" full onClick={() => { completeTask(task.id); onClose() }}>
@@ -719,9 +745,9 @@ function TemplatesSection() {
                   </Card>
                 </div>
               ) : (
-                <ul className="border-y border-line divide-y divide-line bg-surface">
+                <Rows>
                   {active.map(t => <TemplateRow key={t.id} tpl={t} db={db} onOpen={() => setEditing(t)} />)}
-                </ul>
+                </Rows>
               )}
 
               {paused.length > 0 && (
@@ -729,9 +755,9 @@ function TemplatesSection() {
                   <div className="px-4 sm:px-6 mt-4 mb-1 text-[12px] uppercase tracking-wider text-faint font-medium">
                     Вимкнені
                   </div>
-                  <ul className="border-y border-line divide-y divide-line bg-surface opacity-70">
+                  <Rows className="opacity-70">
                     {paused.map(t => <TemplateRow key={t.id} tpl={t} db={db} onOpen={() => setEditing(t)} />)}
-                  </ul>
+                  </Rows>
                 </>
               )}
             </>
@@ -822,6 +848,9 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
   const [assignee, setAssignee] = useState<ID | undefined>(initial.defaultAssigneeId)
   const [active, setActive] = useState(initial.active)
 
+  /** Видалення дають лише наявному шаблону — по ньому й розрізняємо новий. */
+  const isNew = !onDelete
+
   const areas = knownAreas(db)
   const days = Number(interval)
   const mday = Number(byMonthDay)
@@ -854,22 +883,6 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
       <Field label="Що робимо" htmlFor="tpl-title">
         <Input id="tpl-title" value={title} onChange={setTitle} autoFocus
                placeholder="Пропилососити" onEnter={submit} />
-      </Field>
-
-      <Field label="Зона" htmlFor="tpl-area" hint="Необов'язково — просто щоб згрупувати">
-        <Input id="tpl-area" value={area} onChange={setArea} placeholder="Кухня, авто, документи…" />
-        {areas.length > 0 && (
-          <div className="flex gap-1 flex-wrap mt-1.5">
-            {areas.map(a => (
-              <Pill key={a} active={area.trim() === a}
-                onClick={() => setArea(area.trim() === a ? '' : a)}>{a}</Pill>
-            ))}
-          </div>
-        )}
-      </Field>
-
-      <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач.">
-        <Segmented<'1' | '2' | '3'> full value={effort} onChange={setEffort} label="Складність" items={EFFORTS} />
       </Field>
 
       <Field label="Коли повторювати">
@@ -973,10 +986,41 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
         </Field>
       )}
 
-      <div className="border-t border-line pt-2 mt-1">
-        <Switch checked={active} onChange={setActive} label="Шаблон активний"
-                hint={active ? 'Створює нові задачі за розкладом' : 'Нові задачі не створюються, наявні лишаються'} />
-      </div>
+      {/* Зона і складність мають розумні типові значення — до них доходять
+          одиниці, тож вони згорнуті в кнопки, а не займають форму. */}
+      <OptionalFields items={[
+        { key: 'area', label: 'Зона', filled: area.trim().length > 0, clear: () => setArea(''),
+          render: remove => (
+            <Field label="Зона" htmlFor="tpl-area" hint="Просто щоб згрупувати" onRemove={remove}>
+              <Input id="tpl-area" value={area} onChange={setArea} placeholder="Кухня, авто, документи…" />
+              {areas.length > 0 && (
+                <div className="flex gap-1 flex-wrap mt-1.5">
+                  {areas.map(a => (
+                    <Pill key={a} active={area.trim() === a}
+                      onClick={() => setArea(area.trim() === a ? '' : a)}>{a}</Pill>
+                  ))}
+                </div>
+              )}
+            </Field>
+          ) },
+
+        // складність завжди має значення, тож «порожньо» тут — це типова середня
+        { key: 'effort', label: 'Складність', filled: effort !== '2', clear: () => setEffort('2'),
+          render: remove => (
+            <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач."
+              onRemove={remove}>
+              <Segmented<'1' | '2' | '3'> full value={effort} onChange={setEffort} label="Складність" items={EFFORTS} />
+            </Field>
+          ) },
+      ]} />
+
+      {/* Новий шаблон завжди активний — перемикач тут лише заважає. */}
+      {!isNew && (
+        <div className="border-t border-line pt-2 mt-1">
+          <Switch checked={active} onChange={setActive} label="Шаблон активний"
+                  hint={active ? 'Створює нові задачі за розкладом' : 'Нові задачі не створюються, наявні лишаються'} />
+        </div>
+      )}
 
       {scheduleOk && (
         <div className="mt-3 rounded-lg bg-surface2 px-3 py-2 text-[12.5px] text-muted">

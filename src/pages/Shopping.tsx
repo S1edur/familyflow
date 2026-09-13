@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Avatar, Btn, ConfirmButton, Empty, Field, FormActions, Icon,
-  IconButton, Input, ListRow, MoneyInput, Pill, SectionTitle, Select, Sheet, toast,
+  IconButton, Input, ListRow, MoneyInput, Pill, SectionTitle, Select, Sheet, toast, Rows,
 } from '../ui'
 import {
   useDB, addShoppingItem, updateShoppingItem, toggleShoppingItem,
@@ -97,7 +97,7 @@ export default function Shopping() {
           <div className="sm:px-6">
             <SectionTitle>{cat}</SectionTitle>
           </div>
-          <ul className="border-y border-line divide-y divide-line bg-surface">
+          <Rows>
             {items.map(i => {
               const by = db.members.find(m => m.id === i.addedBy)
               return (
@@ -122,7 +122,7 @@ export default function Shopping() {
                 </ListRow>
               )
             })}
-          </ul>
+          </Rows>
         </section>
       ))}
 
@@ -209,7 +209,7 @@ function PastTrips() {
         </SectionTitle>
       </div>
       {open && (
-        <ul className="border-y border-line divide-y divide-line bg-surface">
+        <Rows>
           {trips.map(t => {
             const by = db.members.find(m => m.id === t.shoppedBy)
             // кількість позицій тепер похідна — товари привʼязані до походу, а не видалені
@@ -228,7 +228,7 @@ function PastTrips() {
               </ListRow>
             )
           })}
-        </ul>
+        </Rows>
       )}
     </section>
   )

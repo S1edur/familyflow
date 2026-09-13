@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Avatar, Badge, Btn, Card, ConfirmButton, Field, FormActions, Icon, Input,
-  Pill, SectionTitle, Sheet,
+  Pill, SectionTitle, Sheet, Rows,
 } from '../ui'
 import { useDB, setMe, updateMember, setRates, resetAll } from '../data/store'
 import type { Member } from '../data/types'
@@ -52,7 +52,7 @@ export default function SettingsFamily() {
       <SectionTitle>
         Учасники
       </SectionTitle>
-      <ul className="border-y border-line divide-y divide-line bg-surface">
+      <Rows>
         {db.members.map(m => (
           <li key={m.id}>
             <button onClick={() => setEditing(m)}
@@ -69,7 +69,7 @@ export default function SettingsFamily() {
             </button>
           </li>
         ))}
-      </ul>
+      </Rows>
 
       {/* ── курси ── */}
       <SectionTitle>Курси валют</SectionTitle>

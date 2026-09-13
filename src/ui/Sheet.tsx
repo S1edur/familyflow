@@ -19,12 +19,12 @@ export function Sheet({ open, onClose, title, children }: {
          onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="absolute inset-0 bg-black/35" />
       <div ref={ref} role="dialog" aria-modal
-           className="sheet-enter relative w-full sm:w-[420px] bg-surface border-t sm:border border-line sm:rounded-xl rounded-t-2xl shadow-xl max-h-[92vh] overflow-y-auto safe-b">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+           className="sheet-enter relative w-full sm:w-[460px] bg-surface border-t sm:border border-line sm:rounded-xl rounded-t-2xl shadow-xl max-h-[92vh] overflow-y-auto safe-b">
+        <div className="flex items-center justify-between px-4 sm:px-5 pt-4 pb-2">
           <div className="text-[15px] font-semibold">{title}</div>
           <button onClick={onClose} className="text-faint hover:text-ink p-1 -mr-1" aria-label="Закрити">{Icon.x(18)}</button>
         </div>
-        <div className="px-4 pb-4">{children}</div>
+        <div className="px-4 sm:px-5 pb-4 sm:pb-5">{children}</div>
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-import { Avatar, Btn, Empty, Icon, PriorityMark } from '../components/ui'
+import { Avatar, Btn, Empty, Icon, PriorityMark, Rows } from '../components/ui'
 import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending, isIncomeOccurrence } from '../data/store'
 import { money, moneyShort } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
@@ -35,7 +35,7 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
       </header>
 
       <section className="px-4 sm:px-6">
-        <Link to="/month" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
+        <Link to="/envelopes" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
           <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
           <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>{money(sum.free)}</div>
           <div className="text-[12.5px] text-faint mt-1 num">
@@ -50,7 +50,7 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
           <Link to="/tasks" className="text-[12.5px] text-accent">усі</Link>
         </div>
         {mine.length || shopRow ? (
-          <ul className="border-y border-line divide-y divide-line bg-surface">
+          <Rows>
             {shopRow && (
               <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11">
                 <Link to="/shopping" aria-label="Відкрити покупки"
@@ -76,7 +76,7 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
                 </li>
               )
             })}
-          </ul>
+          </Rows>
         ) : <Empty>На сьогодні нічого. Можна видихнути.</Empty>}
       </section>
 
@@ -87,21 +87,21 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
               Прострочені <span className="num">{overdue.length}</span>
             </h2>
           </div>
-          <ul className="border-y border-line divide-y divide-line bg-surface">
+          <Rows>
             {overdue.map(o => <BillRow key={o.id} o={o} />)}
-          </ul>
+          </Rows>
         </section>
       )}
 
       <section className="mt-6">
         <div className="px-4 sm:px-6 mb-1 flex items-baseline justify-between">
           <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium">Найближчі сім днів</h2>
-          <Link to="/month" className="text-[12.5px] text-accent">місяць</Link>
+          <Link to="/bills" className="text-[12.5px] text-accent">платежі</Link>
         </div>
         {soon.length ? (
-          <ul className="border-y border-line divide-y divide-line bg-surface">
+          <Rows>
             {soon.map(o => <BillRow key={o.id} o={o} />)}
-          </ul>
+          </Rows>
         ) : <Empty>Найближчим тижнем платежів немає</Empty>}
       </section>
 

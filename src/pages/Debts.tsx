@@ -2,14 +2,14 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, IconButton, Input, LinkChip, LinkGroup, LinkRow, MoneyInput, Progress, SectionTitle,
-  Select, Sheet, useSheet,
+  Icon, IconButton, Input, LinkChip, LinkGroup, LinkRow, MoneyInput, OptionalFields, Progress,
+  SectionTitle, Select, Sheet, useSheet,
 } from '../ui'
 import {
   useDB, debtStatus, debtEnvelopeId, addEntry,
   addDebt, updateDebt, closeDebt, reopenDebt,
 } from '../data/store'
-import { debtLinks, envelopeRoute, ruleRoute } from '../data/links'
+import { debtLinks, envelopeRoute, newRuleRoute, ruleRoute } from '../data/links'
 import type { Currency, DB, Debt } from '../data/types'
 import { money, toBase } from '../lib/money'
 import { iso, longDate, shortDate, today } from '../lib/dates'
@@ -80,7 +80,7 @@ function Payments({ debt, db, envelopeId, onGo }: {
         : 'Поки що платежі вносяться вручну. Регулярне правило робитиме це за розкладом.'}
       actions={hasRule
         ? undefined
-        : <AttachButton onClick={() => onGo(`/month?tab=bills&rule=new&debt=${debt.id}${envelopeId ? `&env=${envelopeId}` : ''}`)}>
+        : <AttachButton onClick={() => onGo(newRuleRoute({ debtId: debt.id, envelopeId }))}>
             Регулярний платіж
           </AttachButton>}>
       {links.map(l => <LinkRow key={l.key} link={l} onOpen={() => onGo(l.to)} />)}
@@ -331,7 +331,7 @@ export default function Debts() {
                         </LinkChip>
                       ) : (
                         <LinkChip icon="clock"
-                          onClick={() => nav(`/month?tab=bills&rule=new&debt=${d.id}${payEnvelopeId ? `&env=${payEnvelopeId}` : ''}`)}>
+                          onClick={() => nav(newRuleRoute({ debtId: d.id, envelopeId: payEnvelopeId }))}>
                           зробити регулярним
                         </LinkChip>
                       )}
@@ -420,37 +420,75 @@ export default function Debts() {
             placeholder="Кредит на авто" autoFocus />
         </Field>
 
-        <Field label="Кому" htmlFor="debt-cp" hint="Банк, людина, магазин — необов'язково">
-          <Input id="debt-cp" value={draft.counterparty} onChange={v => set('counterparty', v)}
-            placeholder="Мамі" />
+        <Field label="Тіло боргу" htmlFor="debt-principal">
+          <MoneyInput id="debt-principal" valueMinor={draft.principalMinor}
+            currency={draft.currency} onChange={v => set('principalMinor', v)} />
         </Field>
 
-        <div className="grid grid-cols-[1fr_auto] gap-3">
-          <Field label="Тіло боргу" htmlFor="debt-principal">
-            <MoneyInput id="debt-principal" valueMinor={draft.principalMinor}
-              currency={draft.currency} onChange={v => set('principalMinor', v)} />
-          </Field>
-          <Field label="Валюта" htmlFor="debt-currency">
-            <Select id="debt-currency" value={draft.currency}
-              onChange={v => set('currency', v)} options={CURRENCIES} />
-          </Field>
-        </div>
-
-        <Field label="Місячний платіж" htmlFor="debt-monthly"
-          hint="Скільки відкладаємо щомісяця. Можна лишити порожнім">
-          <MoneyInput id="debt-monthly" valueMinor={draft.monthlyPaymentMinor}
-            currency={draft.currency} onChange={v => set('monthlyPaymentMinor', v)} />
-        </Field>
-
-        <Field label="Бажана дата закриття" htmlFor="debt-target"
-          hint="Приблизно — щоб бачити, чи встигаємо">
-          <DateInput id="debt-target" value={draft.targetDate} onChange={v => set('targetDate', v)} />
-        </Field>
-
-        <Field label="Дата відкриття" htmlFor="debt-opened">
-          <DateInput id="debt-opened" value={draft.openedOn}
-            onChange={v => set('openedOn', v ?? today())} />
-        </Field>
+        {/* Решта — необовʼязкове. Борг існує з назвою і тілом; кому, платіж,
+            дати й валюта потрібні не кожному, тож порожніми вони кнопки. */}
+        <OptionalFields items={[
+          {
+            key: 'cp', label: 'Кому',
+            filled: !!draft.counterparty.trim(),
+            clear: () => set('counterparty', ''),
+            render: remove => (
+              <Field label="Кому" htmlFor="debt-cp" onRemove={remove}
+                hint="Банк, людина, магазин">
+                <Input id="debt-cp" value={draft.counterparty}
+                  onChange={v => set('counterparty', v)} placeholder="Мамі" />
+              </Field>
+            ),
+          },
+          {
+            key: 'monthly', label: 'Щомісяця',
+            filled: draft.monthlyPaymentMinor > 0,
+            clear: () => set('monthlyPaymentMinor', 0),
+            render: remove => (
+              <Field label="Щомісяця" htmlFor="debt-monthly" onRemove={remove}
+                hint="Скільки відкладаємо щомісяця">
+                <MoneyInput id="debt-monthly" valueMinor={draft.monthlyPaymentMinor}
+                  currency={draft.currency} onChange={v => set('monthlyPaymentMinor', v)} />
+              </Field>
+            ),
+          },
+          {
+            key: 'target', label: 'Бажано закрити',
+            filled: !!draft.targetDate,
+            clear: () => set('targetDate', undefined),
+            render: remove => (
+              <Field label="Бажано закрити" htmlFor="debt-target" onRemove={remove}
+                hint="Приблизно — щоб бачити, чи встигаємо">
+                <DateInput id="debt-target" value={draft.targetDate}
+                  onChange={v => set('targetDate', v)} />
+              </Field>
+            ),
+          },
+          {
+            // типове — гривня, тож поле показуємо лише коли валюта інша
+            key: 'currency', label: 'Валюта',
+            filled: draft.currency !== 'UAH',
+            clear: () => set('currency', 'UAH'),
+            render: remove => (
+              <Field label="Валюта" htmlFor="debt-currency" onRemove={remove}>
+                <Select id="debt-currency" value={draft.currency}
+                  onChange={v => set('currency', v)} options={CURRENCIES} />
+              </Field>
+            ),
+          },
+          {
+            // при створенні дата вже стоїть сьогоднішня — це не «заповнено»
+            key: 'opened', label: 'Відкрито',
+            filled: draft.openedOn !== today(),
+            clear: () => set('openedOn', today()),
+            render: remove => (
+              <Field label="Відкрито" htmlFor="debt-opened" onRemove={remove}>
+                <DateInput id="debt-opened" value={draft.openedOn}
+                  onChange={v => set('openedOn', v ?? today())} />
+              </Field>
+            ),
+          },
+        ]} />
 
         {draftRemaining > 0 && draft.targetDate && draftPlan.required !== null && (
           draftPlan.lateBy !== null && draftPlan.lateBy > 0 ? (

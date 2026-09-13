@@ -26,6 +26,19 @@ export function Card({ children, className = '', padded = true }: {
   )
 }
 
+/**
+ * Список рядків. На телефоні — на всю ширину екрана, на десктопі — картка
+ * з рамкою: суцільні білі смуги через увесь монітор читаються як таблиця
+ * без меж, і око не бачить, де список починається й де закінчується.
+ */
+export function Rows({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return (
+    <ul className={`bg-surface border-y border-line divide-y divide-line sm:mx-6 sm:border sm:rounded-xl sm:overflow-hidden ${className}`}>
+      {children}
+    </ul>
+  )
+}
+
 /** Рядок списку зі сталою висотою і полями екрана. За замовчуванням — `li`. */
 export function ListRow({ children, as = 'li', onClick, className = '' }: {
   children: ReactNode; as?: 'li' | 'div'; onClick?: () => void; className?: string

@@ -611,7 +611,7 @@ export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[]
     if (o.assigneeId && o.assigneeId !== me) continue
     if (o.dueDate > soonEdge) continue
     soon.push({
-      id: `bill:${o.id}`, to: '/month',
+      id: `bill:${o.id}`, to: '/bills',
       text: o.name, detail: `${relativeDue(o.dueDate).label} · ${money(o.expectedMinor, o.currency)}`,
     })
   }

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Avatar, Icon, SectionTitle } from '../ui'
+import { Avatar, Icon, Rows, SectionTitle } from '../ui'
 import { useDB, setMe } from '../data/store'
 import { AccountCard } from '../components/AccountCard'
 
@@ -10,7 +10,8 @@ import { AccountCard } from '../components/AccountCard'
  * і вхід до розділів, яких немає в таб-барі.
  */
 const SCREENS = [
-  { to: '/month',   label: 'Місяць',  hint: 'План по конвертах і чекліст платежів', icon: Icon.wallet },
+  { to: '/envelopes', label: 'Конверти', hint: 'Скільки на що цього місяця', icon: Icon.wallet },
+  { to: '/bills',     label: 'Платежі',  hint: 'Чекліст місяця і регулярні правила', icon: Icon.clock },
   { to: '/funds',   label: 'Фонди',   hint: 'Цілі й скільки відкладати щомісяця',   icon: Icon.piggy },
   { to: '/debts',   label: 'Борги',   hint: 'Залишок, платежі, дата закриття',      icon: Icon.list },
   { to: '/history', label: 'Історія', hint: 'Усі записи, з правкою і видаленням',   icon: Icon.clock },
@@ -42,7 +43,7 @@ export default function Settings() {
       </div>
 
       <SectionTitle>Розділи</SectionTitle>
-      <ul className="border-y border-line divide-y divide-line bg-surface">
+      <Rows>
         {SCREENS.map(s => (
           <li key={s.to}>
             <Link to={s.to} className="flex items-center gap-3 px-4 sm:px-6 py-3 hover:bg-surface2/60 transition-colors">
@@ -55,10 +56,10 @@ export default function Settings() {
             </Link>
           </li>
         ))}
-      </ul>
+      </Rows>
 
       <SectionTitle>Налаштування</SectionTitle>
-      <ul className="border-y border-line divide-y divide-line bg-surface">
+      <Rows>
         <li>
           <Link to="/settings/family" className="flex items-center gap-3 px-4 sm:px-6 py-3 hover:bg-surface2/60 transition-colors">
             <span className="text-faint shrink-0">{Icon.gear(18)}</span>
@@ -69,7 +70,7 @@ export default function Settings() {
             <span className="text-faint shrink-0">{Icon.chev(16)}</span>
           </Link>
         </li>
-      </ul>
+      </Rows>
 
       <p className="px-4 sm:px-6 mt-4 text-[12.5px] text-faint leading-snug">
         Конверти й регулярні платежі редагуються в «Місяці», фонди — на «Фондах»,

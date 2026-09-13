@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Avatar, Badge, Btn, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, Input, MoneyInput, Segmented, Select, Sheet, Stat, Tabs,
+  Icon, Input, MoneyInput, Segmented, Select, Sheet, Stat, Tabs, Rows,
 } from '../ui'
 import { useDB, updateEntry, removeEntry } from '../data/store'
 import { money, SYMBOL } from '../lib/money'
@@ -145,11 +145,11 @@ export default function History() {
               <h2 className="px-4 sm:px-6 pt-4 pb-1 text-[12px] uppercase tracking-wider text-faint font-medium">
                 {longDate(d.date)}
               </h2>
-              <ul className="border-y border-line divide-y divide-line bg-surface">
+              <Rows>
                 {d.items.map(e => (
                   <EntryRow key={e.id} db={db} entry={e} onOpen={() => setEditId(e.id)} />
                 ))}
-              </ul>
+              </Rows>
             </section>
           ))}
         </div>

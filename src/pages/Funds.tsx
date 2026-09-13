@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
   Icon, IconButton, Input, LinkChip, LinkGroup, LinkRow, MoneyInput, Progress, SectionTitle,
-  Segmented, Sheet, Select, useSheet,
+  OptionalFields, Segmented, Sheet, Select, useSheet,
 } from '../ui'
 import {
   useDB, fundStatus, fundBalance, addFund, updateFund, archiveFund, spendFromFund, addEntry,
@@ -325,17 +325,6 @@ export default function Funds() {
                      items={KINDS.map(k => ({ value: k.value, label: k.label }))} />
         </Field>
 
-        {/* Нагадування: фонд перестає бути місцем, куди треба не забути зайти,
-            і стає рядком у чеклісті місяця — як рахунок. Звʼязок видно і звідси,
-            і з конверта, та з обох боків він веде на інший бік. */}
-        <Reminder db={db} draft={draft} setDraft={setDraft} fund={editing} onGo={nav} />
-
-        <Field label="Валюта" hint="Фонд збирається і витрачається в цій валюті.">
-          <Segmented full label="Валюта" value={draft.currency}
-                     onChange={v => set('currency', v)}
-                     items={CURRENCIES.map(c => ({ value: c.value, label: c.label }))} />
-        </Field>
-
         <Field label="Як рахувати внесок"
                hint={goal
                  ? 'Знаємо суму й дату — місячний внесок рахується сам.'
@@ -349,30 +338,10 @@ export default function Funds() {
         </Field>
 
         {goal ? (
-          <>
-            <Field label="Скільки треба зібрати" htmlFor="fund-target">
-              <MoneyInput id="fund-target" valueMinor={draft.targetMinor} currency={draft.currency}
-                          onChange={v => set('targetMinor', v)} />
-            </Field>
-
-            <Field label="До якої дати" htmlFor="fund-due"
-                   hint={draft.dueDate
-                     ? `Лишилось ${monthsWord(monthsUntil(draft.dueDate))}, рахуючи цей.`
-                     : 'Без дати внесок рахується так, ніби зібрати треба цього ж місяця.'}>
-              <DateInput id="fund-due" value={draft.dueDate} onChange={v => set('dueDate', v)} />
-            </Field>
-
-            <Field label="Запас, %" htmlFor="fund-buffer"
-                   hint="Ціна може зрости. 10% означає, що збираємо на 10% більше за ціль.">
-              <Input id="fund-buffer" align="right" inputMode="numeric"
-                     value={draft.bufferPct ? String(draft.bufferPct) : ''}
-                     placeholder="0"
-                     onChange={v => {
-                       const n = Math.round(Number(v.replace(/[^\d]/g, '')))
-                       set('bufferPct', isFinite(n) ? Math.min(100, n) : 0)
-                     }} />
-            </Field>
-          </>
+          <Field label="Скільки треба зібрати" htmlFor="fund-target">
+            <MoneyInput id="fund-target" valueMinor={draft.targetMinor} currency={draft.currency}
+                        onChange={v => set('targetMinor', v)} />
+          </Field>
         ) : (
           <Field label="Відкладати щомісяця" htmlFor="fund-fixed"
                  hint="Стільки фонд просить кожного місяця, без кінцевої дати.">
@@ -380,6 +349,54 @@ export default function Funds() {
                         onChange={v => set('monthlyFixedMinor', v)} />
           </Field>
         )}
+
+        {/* Усе необовʼязкове — одним рядком «Додати», а не двома: дата й запас
+            мають сенс лише для цілі, тому просто не потрапляють у список
+            у режимі «Сума на місяць». */}
+        <OptionalFields items={[
+          ...(goal ? [
+            { key: 'due', label: 'До якої дати', filled: !!draft.dueDate,
+              clear: () => set('dueDate', undefined),
+              render: (remove?: () => void) => (
+                <Field label="До якої дати" htmlFor="fund-due" onRemove={remove}
+                       hint={draft.dueDate
+                         ? `Лишилось ${monthsWord(monthsUntil(draft.dueDate))}, рахуючи цей.`
+                         : 'Без дати внесок рахується так, ніби зібрати треба цього ж місяця.'}>
+                  <DateInput id="fund-due" value={draft.dueDate} onChange={v => set('dueDate', v)} />
+                </Field>
+              ) },
+            // 0 — це «без запасу», тобто поле порожнє, а не заповнене нулем.
+            { key: 'buffer', label: 'Запас, %', filled: draft.bufferPct > 0,
+              clear: () => set('bufferPct', 0),
+              render: (remove?: () => void) => (
+                <Field label="Запас, %" htmlFor="fund-buffer" onRemove={remove}
+                       hint="Ціна може зрости. 10% означає, що збираємо на 10% більше за ціль.">
+                  <Input id="fund-buffer" align="right" inputMode="numeric"
+                         value={draft.bufferPct ? String(draft.bufferPct) : ''}
+                         placeholder="0"
+                         onChange={v => {
+                           const n = Math.round(Number(v.replace(/[^\d]/g, '')))
+                           set('bufferPct', isFinite(n) ? Math.min(100, n) : 0)
+                         }} />
+                </Field>
+              ) },
+          ] : []),
+          // Нагадування: фонд стає рядком у чеклісті місяця — як рахунок.
+          // Заповнене показується звʼязком, який веде в конверт.
+          { key: 'reminder', label: 'Нагадування', filled: !!draft.envelopeId,
+            clear: () => setDraft(d => ({ ...d, envelopeId: '' })),
+            render: () => <Reminder db={db} draft={draft} setDraft={setDraft} fund={editing} onGo={nav} /> },
+          // 'UAH' — типове значення, тож гривневий фонд валюти не показує.
+          { key: 'currency', label: 'Валюта', filled: draft.currency !== 'UAH',
+            clear: () => set('currency', 'UAH'),
+            render: (remove?: () => void) => (
+              <Field label="Валюта" onRemove={remove} hint="Фонд збирається і витрачається в цій валюті.">
+                <Segmented full label="Валюта" value={draft.currency}
+                           onChange={v => set('currency', v)}
+                           items={CURRENCIES.map(c => ({ value: c.value, label: c.label }))} />
+              </Field>
+            ) },
+        ]} />
 
         <Explain draft={draft} balance={balance} preview={preview} />
 

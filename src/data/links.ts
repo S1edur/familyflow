@@ -84,10 +84,17 @@ export interface Link {
   to: string
 }
 
-export const envelopeRoute = (id: ID) => `/month?env=${id}`
+export const envelopeRoute = (id: ID) => `/envelopes?env=${id}`
 export const fundRoute = (id: ID) => `/funds?fund=${id}`
 export const debtRoute = (id: ID) => `/debts?debt=${id}`
-export const ruleRoute = (id: ID) => `/month?tab=bills&rule=${id}`
+/** Нове правило з уже підставленими конвертом і боргом. */
+export const newRuleRoute = (opts: { envelopeId?: ID; debtId?: ID } = {}) => {
+  const q = new URLSearchParams({ rule: 'new' })
+  if (opts.debtId) q.set('debt', opts.debtId)
+  if (opts.envelopeId) q.set('env', opts.envelopeId)
+  return `/bills?${q}`
+}
+export const ruleRoute = (id: ID) => `/bills?rule=${id}`
 
 const dayText = (day: number) => `${day} числа щомісяця`
 
