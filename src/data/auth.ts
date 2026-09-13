@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { supabase, isCloudConfigured, cloud } from './supabase'
-import { bindHousehold } from './store'
+import { bindHousehold, unbindHousehold } from './store'
 import type { Member } from './types'
 
 /**
@@ -115,13 +115,36 @@ async function loadHouseholdData(householdId: string) {
 export function signInWithGoogle() {
   return cloud().auth.signInWithOAuth({
     provider: 'google',
-    // повертаємось туди ж, звідки пішли — HashRouter тримає маршрут у #
-    options: { redirectTo: window.location.origin + window.location.pathname },
+    options: {
+      // повертаємось туди ж, звідки пішли — HashRouter тримає маршрут у #
+      redirectTo: window.location.origin + window.location.pathname,
+      // Без цього Google мовчки бере акаунт, у який браузер уже ввійшов, —
+      // на телефоні змінити пошту стає неможливо. Вибір показуємо завжди.
+      queryParams: { prompt: 'select_account' },
+    },
   })
 }
 
 export async function signOut() {
+  unbindHousehold()
   await cloud().auth.signOut()
+}
+
+/**
+ * Покинути дім. Одна людина — один дім, тож без цього приєднатись до іншого
+ * за кодом неможливо: база відповідає «Ви вже в домі».
+ *
+ * Видаляється лише власне членство (політика members_delete дозволяє саме
+ * це). Дані дому лишаються в базі для інших учасників.
+ */
+export async function leaveHousehold(): Promise<void> {
+  if (auth.status !== 'in') return
+  const { error } = await cloud().from('household_members')
+    .delete().eq('profile_id', auth.userId)
+  if (error) throw new Error(error.message)
+  unbindHousehold()
+  household = null
+  emit()
 }
 
 /**

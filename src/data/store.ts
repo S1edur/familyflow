@@ -217,6 +217,21 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   void drain()
 }
 
+/**
+ * Відвʼязати сховище від дому: вихід з акаунта або «покинути дім».
+ * Черга й локальні дані належали тому дому — у наступний їм не можна.
+ */
+export function unbindHousehold() {
+  unwatch?.()
+  unwatch = null
+  if (refreshTimer) clearTimeout(refreshTimer)
+  householdId = null
+  clearQueue()
+  try { localStorage.removeItem(BOUND_KEY) } catch { /* приватний режим */ }
+  db = materialize(emptyDB())
+  emit()
+}
+
 /** Сховище привʼязане до дому в Supabase. */
 export const isBound = () => householdId !== null
 

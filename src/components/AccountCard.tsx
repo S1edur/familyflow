@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Btn, Card, Icon, SectionTitle, toast } from '../ui'
-import { useAuth, useHousehold, createInvite, signOut } from '../data/auth'
+import { Btn, Card, ConfirmButton, Icon, SectionTitle, toast } from '../ui'
+import { useAuth, useHousehold, createInvite, leaveHousehold, signOut } from '../data/auth'
 
 /**
  * Акаунт і запрошення. Свідомо окремо від «Сімʼя і валюти»: там локальні
@@ -85,10 +85,24 @@ export function AccountCard() {
           </div>
         </Card>
 
-        <button onClick={() => void signOut()}
-          className="mt-3 w-full text-[12.5px] text-faint hover:text-muted py-2">
-          Вийти
-        </button>
+        {/* Вийти — інша пошта. Покинути дім — та сама пошта, але інший дім за кодом. */}
+        <div className="mt-3 flex flex-col items-stretch gap-1">
+          <button onClick={() => void signOut()}
+            className="w-full text-[12.5px] text-faint hover:text-muted py-2">
+            Вийти з акаунта
+          </button>
+          <ConfirmButton variant="quiet" confirmLabel="Точно покинути дім?"
+            onConfirm={() => {
+              leaveHousehold()
+                .then(() => toast('Ви покинули дім. Можна створити новий або приєднатись за кодом'))
+                .catch(e => toast(e instanceof Error ? e.message : 'Не вдалось покинути дім', { tone: 'warn' }))
+            }}>
+            Покинути дім
+          </ConfirmButton>
+          <p className="text-[12px] text-faint text-center leading-snug px-2">
+            Щоб перейти в інший дім із цією ж поштою. Дані дому лишаться в ньому для інших учасників.
+          </p>
+        </div>
       </div>
     </>
   )
