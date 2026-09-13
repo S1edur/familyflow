@@ -1,12 +1,42 @@
 import { useMemo, useState } from 'react'
-import { Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet, toast } from '../ui'
+import { AttachButton, Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet, toast } from '../ui'
 import { useDB, addEntry } from '../data/store'
 import { SYMBOL, money, parseAmount } from '../lib/money'
-import type { Currency, EntryKind } from '../data/types'
-import { monthKey, today } from '../lib/dates'
+import type { Currency, DB, Envelope, EntryKind } from '../data/types'
+import { addDays, monthKey, today } from '../lib/dates'
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', '⌫']
 type Kind = Extract<EntryKind, 'expense' | 'income'>
+const SUGGEST_DAYS = 60
+const SUGGEST_MAX = 4
+
+// Конверти, куди найчастіше пишуть витрати останнім часом. Рахуємо на читанні
+// з записів, нічого не зберігаючи (інваріант 4): звичка змінюється — підказки теж.
+function suggestEnvelopes(db: DB): Envelope[] {
+  const usable = new Map(db.envelopes
+    .filter(e => e.kind !== 'income' && !e.archived)
+    .map(e => [e.id, e]))
+  const since = addDays(today(), -SUGGEST_DAYS)
+  const stats = new Map<string, { n: number; last: string }>()
+  for (const e of db.entries) {
+    if (e.kind !== 'expense' || !e.envelopeId || e.occurredOn < since || !usable.has(e.envelopeId)) continue
+    const cur = stats.get(e.envelopeId) ?? { n: 0, last: '' }
+    cur.n++
+    if (e.occurredOn > cur.last) cur.last = e.occurredOn
+    stats.set(e.envelopeId, cur)
+  }
+  if (stats.size) {
+    return [...stats.entries()]
+      .sort(([, a], [, b]) => b.n - a.n || b.last.localeCompare(a.last))
+      .slice(0, SUGGEST_MAX)
+      .map(([id]) => usable.get(id)!)
+  }
+  // новий дім без історії: змінні витрати — найімовірніше, що пишуть першими
+  return [...usable.values()]
+    .filter(e => e.kind === 'variable')
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .slice(0, SUGGEST_MAX)
+}
 
 export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
   const db = useDB()
@@ -18,8 +48,10 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
 
   const spendable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
   const incoming = db.envelopes.filter(e => e.kind === 'income' && !e.archived)
+  const suggested = useMemo(() => suggestEnvelopes(db), [db.envelopes, db.entries])
   // конверт запам'ятовується окремо для кожного типу: списки не перетинаються
-  const [expenseEnv, setExpenseEnv] = useState(spendable[4]?.id ?? spendable[0]?.id ?? '')
+  const [expenseEnv, setExpenseEnv] = useState(() => suggestEnvelopes(db)[0]?.id ?? spendable[0]?.id ?? '')
+  const [pickOther, setPickOther] = useState(false)
   const [incomeEnv, setIncomeEnv] = useState(incoming[0]?.id ?? '')
 
   const envelopes = kind === 'income' ? incoming : spendable
@@ -58,7 +90,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
     // чи взагалі щось сталось: лист закрився і все
     const env = db.envelopes.find(e => e.id === envelopeId)
     toast(`${kind === 'income' ? 'Дохід' : 'Записано'}: ${money(minor, currency)}${env ? ' · ' + env.name : ''}`)
-    setRaw(''); setNote(''); setDate(today())
+    setRaw(''); setNote(''); setDate(today()); setPickOther(false)
     onClose()
   }
 
@@ -68,6 +100,10 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
     .filter(e => e.kind === kind && monthKey(e.occurredOn) === month
       && (kind === 'income' || e.envelopeId === envelopeId))
     .reduce((s, e) => s + e.amountBaseMinor, 0)
+
+  // вибраний поза підказками теж стає пілюлею — інакше вибір не видно
+  const picked = spendable.find(e => e.id === expenseEnv)
+  const pills = picked && !suggested.some(e => e.id === picked.id) ? [...suggested, picked] : suggested
 
   return (
     <Sheet open={open} onClose={onClose} title={kind === 'income' ? 'Дохід' : 'Витрата'}>
@@ -102,11 +138,35 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
         </div>
       )}
 
-      <div className="mb-2">
-        <Select value={envelopeId} onChange={setEnvelopeId}
-          options={envelopes.map(e => ({ value: e.id, label: e.name }))}
-          placeholder={envelopes.length ? undefined : 'Конвертів немає'} />
-      </div>
+      {kind === 'expense' ? (
+        <div className="mb-2">
+          <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Конверт">
+            {pills.map(e => (
+              <Pill key={e.id} active={e.id === expenseEnv}
+                // конверт необов'язковий: повторний тап знімає вибір
+                onClick={() => setExpenseEnv(cur => (cur === e.id ? '' : e.id))}>
+                {e.name}
+              </Pill>
+            ))}
+            {!pickOther && spendable.length > pills.length && (
+              <AttachButton onClick={() => setPickOther(true)}>Інший…</AttachButton>
+            )}
+          </div>
+          {pickOther && (
+            <div className="mt-1.5">
+              <Select value={expenseEnv} placeholder="Без конверта"
+                onChange={v => { setExpenseEnv(v); setPickOther(false) }}
+                options={spendable.map(e => ({ value: e.id, label: e.name }))} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mb-2">
+          <Select value={envelopeId} onChange={setEnvelopeId}
+            options={envelopes.map(e => ({ value: e.id, label: e.name }))}
+            placeholder={envelopes.length ? undefined : 'Конвертів немає'} />
+        </div>
+      )}
 
       <div className="flex gap-1.5 mb-2 items-center flex-wrap">
         {(['UAH', 'USD', 'EUR'] as Currency[]).map(c => (

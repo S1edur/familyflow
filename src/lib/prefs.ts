@@ -24,3 +24,14 @@ export function readSeenAt(): string {
 export function writeSeenAt(iso = new Date().toISOString()) {
   try { localStorage.setItem(SEEN_AT, iso) } catch { /* приватний режим */ }
 }
+
+const SETUP_HIDDEN = 'ff.setupHidden'
+
+/** «Перші кроки» сховані цим учасником. Перегляд: партнер свої бачить далі. */
+export function readSetupHidden(): boolean {
+  try { return localStorage.getItem(SETUP_HIDDEN) === '1' } catch { return false }
+}
+
+export function writeSetupHidden(on: boolean) {
+  try { localStorage.setItem(SETUP_HIDDEN, on ? '1' : '0') } catch { /* приватний режим */ }
+}

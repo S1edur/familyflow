@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
   Icon, Input, LinkChip, OptionalFields, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
-  Textarea, priorityLabel, Rows,
+  Textarea, priorityLabel, Rows, PropertyMenu, type MenuOption,
 } from '../ui'
 import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
@@ -541,6 +541,30 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
   )
 }
 
+/** Кружечок статусу для меню: порожній → половина → галочка, як читається прогрес. */
+function StatusIcon({ s }: { s: TaskStatus }) {
+  if (s === 'done') return <span className="text-accent">{Icon.check(14)}</span>
+  return (
+    <svg width={14} height={14} viewBox="0 0 14 14" aria-hidden
+      className={s === 'doing' ? 'text-accent' : 'text-muted'}>
+      <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5"
+        strokeDasharray={s === 'backlog' ? '2 2' : undefined} />
+      {s === 'doing' && <path d="M7 3.5a3.5 3.5 0 0 1 0 7z" fill="currentColor" />}
+    </svg>
+  )
+}
+
+const STATUS_OPTIONS: MenuOption<TaskStatus>[] = ([
+  ['backlog', 'Колись'], ['todo', 'До виконання'], ['doing', 'В роботі'], ['done', 'Зроблено'],
+] as [TaskStatus, string][]).map(([value, label]) => ({ value, label, icon: <StatusIcon s={value} /> }))
+
+// 0 — «Без пріоритету», останнім (інваріант 8).
+const PRIORITY_OPTIONS: MenuOption<Priority>[] = ([1, 2, 3, 4, 0] as Priority[])
+  .map(p => ({ value: p, label: priorityLabel(p), icon: <PriorityMark p={p} size={14} /> }))
+
+// Меню працює з рядками; «вільна» задача в даних — це undefined.
+const UNASSIGNED = '__unassigned__'
+
 function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }) {
   const db = useDB()
   if (!task) return null
@@ -549,38 +573,20 @@ function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }
   return (
     <Sheet open={!!task} onClose={onClose} title="Задача">
       <input value={task.title} onChange={e => updateTask(task.id, { title: e.target.value })}
-        className="w-full text-[16px] font-medium bg-transparent outline-none mb-3" />
+        className="w-full text-[16px] font-medium bg-transparent outline-none mb-2" />
 
-      <Field label="Статус">
-        <div className="flex gap-1 flex-wrap">
-          {(['backlog', 'todo', 'doing', 'done'] as TaskStatus[]).map(s => (
-            <Pill key={s} active={task.status === s} onClick={() => updateTask(task.id, { status: s })}>
-              {s === 'backlog' ? 'Колись' : s === 'todo' ? 'До виконання' : s === 'doing' ? 'В роботі' : 'Зроблено'}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-
-      <Field label="Пріоритет">
-        <div className="flex gap-1 flex-wrap">
-          {([1, 2, 3, 4, 0] as Priority[]).map(p => (
-            <Pill key={p} active={task.priority === p} onClick={() => setPriority(task.id, p)}>
-              <PriorityMark p={p} size={12} /> {priorityLabel(p)}
-            </Pill>
-          ))}
-        </div>
-      </Field>
-
-      <Field label="Виконавець">
-        <div className="flex gap-1">
-          {db.members.map(m => (
-            <Pill key={m.id} active={task.assigneeId === m.id} onClick={() => setAssignee(task.id, m.id)}>
-              <Avatar member={m} size={16} /> {m.name}
-            </Pill>
-          ))}
-          <Pill active={!task.assigneeId} onClick={() => setAssignee(task.id, undefined)}>Вільна</Pill>
-        </div>
-      </Field>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        <PropertyMenu label="Статус" value={task.status} placeholder="Прибрана"
+          options={STATUS_OPTIONS} onChange={s => updateTask(task.id, { status: s })} />
+        <PropertyMenu label="Пріоритет" value={task.priority}
+          options={PRIORITY_OPTIONS} onChange={p => setPriority(task.id, p)} />
+        <PropertyMenu label="Виконавець" value={task.assigneeId ?? UNASSIGNED}
+          options={[
+            ...db.members.map(m => ({ value: m.id, label: m.name, icon: <Avatar member={m} size={16} /> })),
+            { value: UNASSIGNED, label: 'Вільна', icon: <Avatar size={16} /> },
+          ]}
+          onChange={v => setAssignee(task.id, v === UNASSIGNED ? undefined : v)} />
+      </div>
 
       {/* Решта задачі здебільшого порожня: дедлайн, зона, нотатка потрібні
           одиницям. Порожніми полями вони читаються як список обовʼязків. */}

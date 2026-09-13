@@ -36,6 +36,7 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 | `Badge.tsx` | `Badge`, `Pill` |
 | `Form.tsx` | `Field`, `Input`, `Textarea`, `Select`, `MoneyInput`, `DateInput`, `Switch`, `fieldClass` |
 | `Optional.tsx` | `OptionalFields` |
+| `Menu.tsx` | `PropertyMenu`, `MenuOption` |
 
 ---
 
@@ -98,6 +99,14 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 `{ value; onChange; items: { value: T; label: string }[]; full?; label? }`.
 2–4 взаємовиключні варіанти **всередині форми** (тип конверта, періодичність).
 Для вкладок екрана беремо `Tabs`.
+
+### `PropertyMenu<T extends string | number>`
+`{ label: string; value: T; options: { value: T; label: string; icon?: ReactNode }[]; onChange: (v: T) => void; placeholder?: ReactNode }`.
+Одна властивість — один компактний чип, як у Linear: статус, пріоритет, виконавець
+рядком під назвою замість трьох блоків пілюль. Тап відкриває меню з галочкою біля
+поточного. Меню рендериться порталом із `position: fixed` — інакше `overflow` листа
+його обрізає. Закривається вибором, кліком поза ним, Escape (лист лишається відкритим),
+скролом. Стрілки, Home/End, Enter.
 
 ### `Pill`
 `{ active?; onClick: () => void; children; disabled?; title? }`.

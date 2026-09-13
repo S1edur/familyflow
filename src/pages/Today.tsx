@@ -1,9 +1,12 @@
-import { Avatar, Btn, Empty, Icon, PriorityMark, Rows } from '../components/ui'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Btn, Empty, Icon, PriorityMark, Rows } from '../ui'
 import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending, isIncomeOccurrence } from '../data/store'
+import { hasIncome, setupSteps } from '../data/setup'
+import { newRuleRoute } from '../data/links'
 import { money, moneyShort } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
-import { readPinShopping } from '../lib/prefs'
-import { Link } from 'react-router-dom'
+import { readPinShopping, readSetupHidden, writeSetupHidden } from '../lib/prefs'
 import type { Occurrence } from '../data/types'
 
 export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
@@ -34,14 +37,27 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
         <div className="text-[12.5px] text-faint">{longDate(t)}</div>
       </header>
 
+      <SetupCard />
+
       <section className="px-4 sm:px-6">
-        <Link to="/envelopes" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
-          <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
-          <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>{money(sum.free)}</div>
-          <div className="text-[12.5px] text-faint mt-1 num">
-            ще платити {money(sum.obligationsLeft)} · у фонди {money(sum.fundsRequired)}
-          </div>
-        </Link>
+        {hasIncome(db) ? (
+          <Link to="/envelopes" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
+            <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>{money(sum.free)}</div>
+            <div className="text-[12.5px] text-faint mt-1 num">
+              ще платити {money(sum.obligationsLeft)} · у фонди {money(sum.fundsRequired)}
+            </div>
+          </Link>
+        ) : (
+          // Без доходу «вільно 0 ₴» — не число, а шум: воно нічого не каже
+          // і виглядає як «грошей немає». Замість нього — що зробити.
+          <Link to={newRuleRoute({ envelopeId: db.envelopes.find(e => e.kind === 'income')?.id })}
+            className="block rounded-xl border border-dashed border-line2 bg-surface p-4 hover:border-accent transition-colors">
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
+            <div className="text-[14px] mt-1">Додайте дохід — і тут зʼявиться, скільки лишається після платежів.</div>
+            <div className="text-[12.5px] text-accent mt-2">Додати зарплату</div>
+          </Link>
+        )}
       </section>
 
       <section className="mt-6">
@@ -128,12 +144,16 @@ function Tile({ to, label, value }: { to: string; label: string; value: string }
   )
 }
 
+/** Той самий рядок, що в «Платежах»: квадрат ліворуч — одна дія, один тап. */
 function BillRow({ o }: { o: Occurrence }) {
   const db = useDB()
   const who = db.members.find(m => m.id === o.assigneeId)
   const due = relativeDue(o.dueDate)
+  const label = isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'
   return (
     <li className="flex items-center gap-2.5 px-4 sm:px-6 py-2.5">
+      <button onClick={() => confirmOccurrence(o.id)} aria-label={`${label}: ${o.name}`} title={label}
+        className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent hover:bg-accentSoft transition-colors" />
       <div className="flex-1 min-w-0">
         <div className="text-[14px] truncate">{o.name}</div>
         <div className={`text-[12px] num ${due.tone === 'over' ? 'text-warn' : 'text-faint'}`}>
@@ -141,10 +161,61 @@ function BillRow({ o }: { o: Occurrence }) {
         </div>
       </div>
       <span className="text-[14px] num text-muted shrink-0">{money(o.expectedMinor, o.currency)}</span>
-      <button onClick={() => confirmOccurrence(o.id)}
-        className="shrink-0 h-9 px-3 rounded-lg border border-line text-[13px] font-medium hover:bg-surface2 active:opacity-70">
-        {isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'}
-      </button>
     </li>
+  )
+}
+
+/**
+ * Перші кроки нового дому. Зникає сама, коли все зроблено, або назавжди —
+ * хрестиком (це вибір перегляду конкретної людини, а не дані дому).
+ */
+function SetupCard() {
+  const db = useDB()
+  const [hidden, setHidden] = useState(readSetupHidden)
+  const steps = setupSteps(db)
+  const done = steps.filter(s => s.done).length
+  if (hidden || done === steps.length) return null
+  const next = steps.find(s => !s.done)
+
+  return (
+    <section className="px-4 sm:px-6 mb-4">
+      <div className="rounded-xl border border-line bg-surface p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] font-semibold">Налаштуймо дім</div>
+            <div className="text-[12.5px] text-faint mt-0.5 num">
+              {done} з {steps.length} · далі застосунок працюватиме сам
+            </div>
+          </div>
+          <button onClick={() => { writeSetupHidden(true); setHidden(true) }}
+            aria-label="Сховати перші кроки" title="Сховати"
+            className="shrink-0 -mr-1 -mt-1 p-1 text-faint hover:text-ink">{Icon.x(16)}</button>
+        </div>
+
+        <div className="mt-3 h-1 rounded-full bg-surface2 overflow-hidden">
+          <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${done / steps.length * 100}%` }} />
+        </div>
+
+        <ol className="mt-3 space-y-1">
+          {steps.map(s => (
+            <li key={s.key}>
+              <Link to={s.to}
+                className={`flex items-start gap-2.5 rounded-lg px-2 py-2 -mx-2 transition-colors ${
+                  s.done ? '' : 'hover:bg-surface2'} ${s === next ? 'bg-surface2/60' : ''}`}>
+                <span className={`mt-0.5 shrink-0 h-[18px] w-[18px] rounded-full border grid place-items-center ${
+                  s.done ? 'bg-accent border-accent text-white' : 'border-line2'}`}>
+                  {s.done && Icon.check(11)}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className={`block text-[14px] ${s.done ? 'text-faint line-through' : ''}`}>{s.title}</span>
+                  {s === next && <span className="block text-[12.5px] text-muted leading-snug mt-0.5">{s.hint}</span>}
+                </span>
+                {!s.done && <span className="shrink-0 text-[12.5px] text-accent mt-0.5">{s.action}</span>}
+              </Link>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
   )
 }

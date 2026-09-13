@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   AttachButton, Badge, Btn, Card, Empty, Field, FormActions, Icon, IconButton, Input,
   LinkGroup, LinkRow, ListRow, Pill, Progress, SectionTitle, Select, Sheet, Stat, Switch,
@@ -12,6 +12,7 @@ import {
   fundStatus,
 } from '../data/store'
 import { envelopeAsk, envelopeSources, newRuleRoute, unlinkedFunds } from '../data/links'
+import { hasIncome } from '../data/setup'
 import { money, parseAmount } from '../lib/money'
 import { monthKey, today } from '../lib/dates'
 import type { DB, Envelope, EnvelopeKind, ID } from '../data/types'
@@ -98,22 +99,34 @@ export default function Envelopes() {
       <header className="px-4 pt-3 pb-3 sm:px-6">
         <MonthBar month={month} onChange={setMonth} />
 
-        <Card>
-          <div className="text-[12px] uppercase tracking-wider text-faint">Вільно до кінця місяця</div>
-          <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>
-            {money(sum.free)}
-          </div>
-          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3 pt-3 border-t border-line text-[13px]">
-            <Stat label="Дохід" value={
-              sum.incomeExpected
-                ? <>{money(sum.income + sum.incomeExpected)}<span className="text-faint text-[11.5px]"> очік.</span></>
-                : money(sum.income)
-            } />
-            <Stat label="Ще платити" value={money(sum.obligationsLeft)} />
-            <Stat label="У фонди" value={money(sum.fundsRequired)} />
-            <Stat label="Витрачено" value={money(sum.spentVariable)} />
-          </dl>
-        </Card>
+        {hasIncome(db) ? (
+          <Card>
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно до кінця місяця</div>
+            <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>
+              {money(sum.free)}
+            </div>
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 mt-3 pt-3 border-t border-line text-[13px]">
+              <Stat label="Дохід" value={
+                sum.incomeExpected
+                  ? <>{money(sum.income + sum.incomeExpected)}<span className="text-faint text-[11.5px]"> очік.</span></>
+                  : money(sum.income)
+              } />
+              <Stat label="Ще платити" value={money(sum.obligationsLeft)} />
+              <Stat label="У фонди" value={money(sum.fundsRequired)} />
+              <Stat label="Витрачено" value={money(sum.spentVariable)} />
+            </dl>
+          </Card>
+        ) : (
+          // чотири нулі поспіль нічого не пояснюють — кажемо, звідки візьмуться числа
+          <Link to={newRuleRoute({ envelopeId: db.envelopes.find(e => e.kind === 'income')?.id })}
+            className="block rounded-xl border border-dashed border-line2 bg-surface p-4 hover:border-accent transition-colors">
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно до кінця місяця</div>
+            <div className="text-[14px] mt-1">
+              Спершу дохід: з нього мінус платежі й внески у фонди — і стане видно, скільки вільно.
+            </div>
+            <div className="text-[12.5px] text-accent mt-2">Додати зарплату</div>
+          </Link>
+        )}
       </header>
 
       <PlanTab db={db} month={month} />
