@@ -14,7 +14,9 @@ export async function pullAll(householdId: string): Promise<Partial<DB>> {
 
   await Promise.all(ENTITIES.map(async e => {
     const { data, error } = await db
-      .from(e.table).select(e.columns).eq('household_id', householdId)
+      .from(e.table).select(e.columns)
+      .eq('household_id', householdId)
+      .is('deleted_at', null)          // поховані не повертаємо
     if (error) throw new Error(`${e.table}: ${error.message}`)
     out[e.key] = (data ?? []).map(r => e.fromRow(r as any))
   }))
@@ -52,9 +54,14 @@ export async function pushDiff(before: DB, after: DB, householdId: string): Prom
     // Складений ключ — видалення там не буває: setPlanned лише вставляє й оновлює
     if (e.onConflict) continue
 
+    // Не DELETE, а мітка. Фізичне видалення НЕ доїжджає до іншого пристрою:
+    // там рядок просто лишається, і наступне перетягування його воскрешає.
+    // Могила ж приїде як звичайна зміна і зникне з вибірки.
     const gone = [...prev.keys()].filter(k => !next.has(k))
     if (gone.length) {
-      const { error } = await db.from(e.table).delete().in('id', gone)
+      const { error } = await db.from(e.table)
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', gone)
       if (error) throw new Error(`${e.table} delete: ${error.message}`)
     }
   }

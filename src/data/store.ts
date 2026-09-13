@@ -135,6 +135,11 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
     try { localStorage.setItem(BOUND_KEY, id) } catch { /* приватний режим */ }
   }
 
+  // Спершу віддати те, що не доїхало минулої сесії. Інакше перетягування
+  // затерло б власні зміни, які просто чекали в черзі на мережу.
+  householdId = id
+  await drain()
+
   const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
   // Прийняте з бази ставимо НАПРЯМУ, без mutate: інакше відправили б назад
   // те, що щойно звідти приїхало.
@@ -143,7 +148,6 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   // materialize міг догенерувати платежі й задачі — ось їх відправити треба
   const withGenerated = materialize(structuredClone(pulled))
   db = withGenerated
-  householdId = id
   emit()
 
   // Зміни партнера приходять самі. Події збираємо в пачку: одна дія
