@@ -85,10 +85,10 @@ export function seed(): DB {
       { id: 'en10', kind: 'debt_payment', occurredOn: addDays(t, -10), amountMinor: 500_000, currency: 'UAH', rateToBase: 1, amountBaseMinor: 500_000, debtId: 'd1', createdBy: ME },
     ],
     funds: [
-      { id: 'f1', name: 'Страховка авто', kind: 'sinking',   currency: 'UAH', targetMinor: 1_400_000, dueDate: `${y + 1}-02-12`, linkedPlanId: 'r7', bufferPct: 5,  priority: 10 },
-      { id: 'f2', name: 'ТО авто',        kind: 'sinking',   currency: 'UAH', targetMinor:   800_000, dueDate: `${y + 1}-05-01`, bufferPct: 10, priority: 20 },
+      { id: 'f1', name: 'Страховка авто', kind: 'sinking',   currency: 'UAH', targetMinor: 1_400_000, dueDate: `${y + 1}-02-12`, linkedPlanId: 'r7', bufferPct: 5,  envelopeId: 'e12', contributionDay: 5, priority: 10 },
+      { id: 'f2', name: 'ТО авто',        kind: 'sinking',   currency: 'UAH', targetMinor:   800_000, dueDate: `${y + 1}-05-01`, bufferPct: 10, envelopeId: 'e12', contributionDay: 5, priority: 20 },
       { id: 'f3', name: 'Подарунки',      kind: 'sinking',   currency: 'UAH', targetMinor:   600_000, dueDate: `${y}-12-20`,     priority: 30 },
-      { id: 'f4', name: 'Відпустка',      kind: 'goal',      currency: 'UAH', targetMinor: 5_000_000, dueDate: `${y + 1}-07-01`, bufferPct: 5,  priority: 40 },
+      { id: 'f4', name: 'Відпустка',      kind: 'goal',      currency: 'UAH', targetMinor: 5_000_000, dueDate: `${y + 1}-07-01`, bufferPct: 5,  envelopeId: 'e13', contributionDay: 5, priority: 40 },
       { id: 'f5', name: 'Подушка',        kind: 'emergency', currency: 'USD', monthlyFixedMinor: 10_000, priority: 50 },
     ],
     debts: [

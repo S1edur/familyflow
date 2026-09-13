@@ -462,6 +462,11 @@ export function monthSummary(d: DB, month: string) {
     .filter(e => e.kind === 'income' && monthKey(e.occurredOn) === month)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
+  // Очікуване зводимо до базової валюти за СЬОГОДНІШНІМ курсом: у платежа,
+  // якого ще не було, замороженого курсу немає й бути не може. Записи —
+  // інша річ, вони несуть amountBaseMinor із моменту створення.
+  const base = (minor: number, c: Currency) => toBase(minor, c, d.rates)
+
   const incomeEnvelopes = new Set(d.envelopes.filter(e => e.kind === 'income').map(e => e.id))
   // платіж у дохідний конверт — це надходження, а не зобовʼязання:
   // віднімати його від «вільно» означало б рахувати зарплату витратою
@@ -472,24 +477,24 @@ export function monthSummary(d: DB, month: string) {
   const incomeExpected = d.occurrences
     .filter(o => monthKey(o.dueDate) === month && incomeEnvelopes.has(o.envelopeId)
       && (o.status === 'due' || o.status === 'projected'))
-    .reduce((s, o) => s + o.expectedMinor, 0)
+    .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
 
   const obligationsLeft = monthOccurrences
     .filter(o => o.status === 'due' || o.status === 'projected')
-    .reduce((s, o) => s + o.expectedMinor, 0)
+    .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
 
   // у «вільно» входять і вже оплачені: гроші пішли з рахунку, і рівняння
   // не має про це забувати, інакше підтвердження платежу ЗБІЛЬШУЄ вільне
   const obligationsAll = monthOccurrences
     .filter(o => o.status !== 'skipped')
-    .reduce((s, o) => s + (o.status === 'paid' ? (o.actualMinor ?? o.expectedMinor) : o.expectedMinor), 0)
+    .reduce((s, o) => s + base(o.status === 'paid' ? (o.actualMinor ?? o.expectedMinor) : o.expectedMinor, o.currency), 0)
 
   // Фонди з конвертом уже породили платежі й сидять в obligationsAll —
   // рахувати їх ще й тут означало б відняти двічі. Окремим рядком лишаються
   // тільки ті, що не автоматизовані.
   const fundsRequired = d.funds
     .filter(f => !f.archived && !f.envelopeId)
-    .reduce((s, f) => s + fundStatus(d, f.id).required, 0)
+    .reduce((s, f) => s + base(fundStatus(d, f.id).required, f.currency), 0)
 
   const spentVariable = d.entries
     .filter(e => (e.kind === 'expense' || e.kind === 'debt_payment')

@@ -9,7 +9,7 @@ import {
   confirmOccurrence, skipOccurrence, unconfirmOccurrence, addOccurrence,
   addEnvelope, updateEnvelope, archiveEnvelope, reorderEnvelope,
   addRecurringPlan, updateRecurringPlan, removeRecurringPlan,
- isIncomeOccurrence} from '../data/store'
+ isIncomeOccurrence, fundStatus, debtStatus } from '../data/store'
 import { money, parseAmount } from '../lib/money'
 import {
   addMonths, clampDayOfMonth, iso, isoDow, longDate, monthKey, monthTitle, parse,
@@ -411,6 +411,82 @@ function PlanInput({ value, onCommit }: { value: number; onCommit: (v: number) =
   )
 }
 
+/**
+ * Що проходить через конверт САМО, без ручного вводу.
+ *
+ * Це відповідь на «а чим конверт відрізняється від фонду й боргу»: конверт
+ * не робить нічого сам, він ПРИЙМАЄ. Фонд, борг і регулярне правило —
+ * це джерела, які в нього щомісяця щось кладуть. Побачивши їх поруч,
+ * стає зрозуміло, звідки береться цифра в плані.
+ */
+function Automatic({ env, db }: { env: Envelope; db: DB }) {
+  const t = today()
+  const month = monthKey(t)
+
+  const funds = db.funds.filter(f => !f.archived && f.envelopeId === env.id)
+  const plans = db.recurringPlans.filter(p => p.active && p.envelopeId === env.id)
+  const debts = env.kind === 'debt' ? db.debts.filter(d => !d.closedOn) : []
+
+  // скільки цей конверт попросить цього місяця — сума його відкритих платежів
+  const thisMonth = db.occurrences
+    .filter(o => o.envelopeId === env.id && monthKey(o.dueDate) === month
+      && (o.status === 'due' || o.status === 'projected'))
+    .reduce((s, o) => s + o.expectedMinor, 0)
+
+  if (!funds.length && !plans.length && !debts.length) {
+    return (
+      <Card className="mb-4">
+        <div className="text-[12.5px] text-muted leading-snug">
+          Сюди нічого не надходить автоматично — витрати потрапляють лише
+          швидким записом. Щоб конверт сам нагадував, привʼяжіть до нього
+          фонд або створіть регулярний платіж.
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <div className="text-[11.5px] uppercase tracking-wider text-faint">Надходить сюди само</div>
+        {thisMonth > 0 && (
+          <div className="text-[13px] num text-muted">
+            цього місяця <span className="text-ink">{money(thisMonth)}</span>
+          </div>
+        )}
+      </div>
+
+      <ul className="space-y-1.5">
+        {funds.map(f => (
+          <li key={f.id} className="flex items-center gap-2 text-[13px]">
+            <span className="text-faint shrink-0">{Icon.piggy(14)}</span>
+            <span className="flex-1 min-w-0 truncate">{f.name}</span>
+            <span className="shrink-0 num text-faint">
+              {money(fundStatus(db, f.id).required, f.currency)} / міс
+            </span>
+          </li>
+        ))}
+        {plans.map(p => (
+          <li key={p.id} className="flex items-center gap-2 text-[13px]">
+            <span className="text-faint shrink-0">{Icon.wallet(14)}</span>
+            <span className="flex-1 min-w-0 truncate">{p.name}</span>
+            <span className="shrink-0 num text-faint">{money(p.expectedMinor, p.currency)}</span>
+          </li>
+        ))}
+        {debts.map(d => (
+          <li key={d.id} className="flex items-center gap-2 text-[13px]">
+            <span className="text-faint shrink-0">{Icon.list(14)}</span>
+            <span className="flex-1 min-w-0 truncate">{d.name}</span>
+            <span className="shrink-0 num text-faint">
+              лишилось {money(debtStatus(db, d.id).remaining, d.currency)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
 function EnvelopeForm({ env, db, onDone }: { env: Envelope | null; db: DB; onDone: () => void }) {
   const [name, setName] = useState(env?.name ?? '')
   const [kind, setKind] = useState<EnvelopeKind>(env?.kind ?? 'variable')
@@ -439,6 +515,8 @@ function EnvelopeForm({ env, db, onDone }: { env: Envelope | null; db: DB; onDon
 
   return (
     <div>
+      {env && <Automatic env={env} db={db} />}
+
       <Field label="Назва" htmlFor="env-name"
         error={duplicate ? 'Конверт з такою назвою вже є' : undefined}
         hint={duplicate ? undefined : 'Коротко, як у житті: «Їжа», «Комуналка», «Авто»'}>
