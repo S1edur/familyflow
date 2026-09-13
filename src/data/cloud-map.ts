@@ -79,7 +79,9 @@ export const RECURRING: Entity<'recurringPlans'> = {
 
 export const OCCURRENCES: Entity<'occurrences'> = {
   key: 'occurrences', table: 'occurrences',
-  columns: 'id, recurring_plan_id, envelope_id, fund_id, name, due_date, expected_amount_minor, currency, status, assignee_id, paid_on, actual_amount_minor, paid_by, note',
+  // updated_at лише читаємо (ставить тригер із 07_sync): це момент оплати для
+  // сповіщення «уже оплачено» — у paid_on є тільки дата, без часу.
+  columns: 'id, recurring_plan_id, envelope_id, fund_id, name, due_date, expected_amount_minor, currency, status, assignee_id, paid_on, actual_amount_minor, paid_by, note, updated_at',
   toRow: (o: Occurrence, h) => ({
     id: o.id, household_id: h, recurring_plan_id: o.planId ?? null,
     envelope_id: o.envelopeId, fund_id: o.fundId ?? null, name: o.name, due_date: o.dueDate,
@@ -93,6 +95,7 @@ export const OCCURRENCES: Entity<'occurrences'> = {
     currency: r.currency, status: r.status, assigneeId: nn(r.assignee_id),
     paidOn: r.paid_on ? String(r.paid_on).slice(0, 10) : undefined,
     actualMinor: nn(r.actual_amount_minor), paidBy: nn(r.paid_by), note: nn(r.note),
+    updatedAt: nn(r.updated_at),
   }),
 }
 

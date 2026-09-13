@@ -22,7 +22,7 @@ const NAV = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
   { to: '/tasks',    label: 'Задачі',   icon: Icon.check },
   { to: '/envelopes', label: 'Конверти', icon: Icon.wallet },
-  { to: '/bills',     label: 'Платежі',  icon: Icon.clock },
+  { to: '/bills',     label: 'Платежі',  icon: Icon.calendar },
   { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
   { to: '/funds',    label: 'Фонди',    icon: Icon.piggy },
 ]

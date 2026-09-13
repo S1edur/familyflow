@@ -4,6 +4,7 @@ import type {
   Envelope, EnvelopeKind, Fund, Debt, RecurringPlan, TaskTemplate, Member, Rates,
 } from './types'
 import { emptyDB, seed } from './seed'
+import { notifyAssigned } from './push'
 import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
@@ -589,6 +590,22 @@ export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[]
     })
   }
 
+  // Партнер оплатив платіж, який висів на мені. Саме для цього існує paidBy:
+  // відповісти на «ти вже оплатив інтернет?» раніше, ніж його поставлять.
+  // Про взаєморозрахунки мови немає — лише «вже зроблено, можна не думати».
+  for (const o of d.occurrences) {
+    if (o.status !== 'paid' || o.assigneeId !== me || !o.paidBy || o.paidBy === me) continue
+    // Момент оплати дає лише updated_at із бази (paid_on — дата без часу).
+    // Локально партнера немає, тож без нього подію просто не показуємо.
+    const at = o.updatedAt
+    if (!at || at <= since) continue
+    fresh.push({
+      id: `paid:${o.id}`, at, to: '/bills',
+      text: `Уже оплачено: ${o.name}`,
+      detail: name(o.paidBy),
+    })
+  }
+
   fresh.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
 
   const soon: Notice[] = []
@@ -730,21 +747,32 @@ export function setPlanned(envelopeId: ID, month: string, plannedMinor: number) 
 }
 
 export function addTask(input: Partial<Task> & { title: string }) {
+  const id = uid()
   mutate(d => {
     d.tasks.push({
-      id: uid(), title: input.title, status: input.status ?? 'todo',
+      id, title: input.title, status: input.status ?? 'todo',
       priority: input.priority ?? 0, effort: input.effort ?? 1,
       assigneeId: input.assigneeId, area: input.area, dueDate: input.dueDate,
       createdBy: d.meId, createdAt: new Date().toISOString(),
     })
   })
+  // Пуш — лише за ЯВНОЇ дії людини. Задачі з шаблонів генерує materialize(),
+  // і будити партнера щоразу, коли черга дійшла до «винести сміття», не треба.
+  if (input.assigneeId && input.assigneeId !== db.meId) {
+    notifyAssigned({ id, title: input.title, assigneeId: input.assigneeId })
+  }
 }
 
 export function updateTask(id: ID, patch: Partial<Task>) {
+  const before = db.tasks.find(x => x.id === id)
   mutate(d => {
     const t = d.tasks.find(x => x.id === id)
     if (t) Object.assign(t, patch)
   })
+  const to = patch.assigneeId
+  if (before && to && to !== before.assigneeId && to !== db.meId) {
+    notifyAssigned({ id, title: patch.title ?? before.title, assigneeId: to })
+  }
 }
 
 export function completeTask(id: ID) {

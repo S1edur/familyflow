@@ -44,7 +44,7 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 
 ### `Icon`
 Мапа `Icon.plus(size?) → JSX`. Розмір за замовчуванням 20.
-Набір: `home check list wallet cart piggy plus x chev more sun moon image gear clock trash pencil`.
+Набір: `home check list wallet cart piggy plus x chev more sun moon image gear bell pin calendar clock trash pencil`.
 Іконка сама по собі `aria-hidden` — підпис дає кнопка навколо неї.
 
 ### `Avatar`

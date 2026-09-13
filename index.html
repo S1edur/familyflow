@@ -6,6 +6,13 @@
     <meta name="theme-color" content="#0E1413" />
     <title>Family Flow</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- PWA: без встановлення на екран «Додому» iPhone не дає вебзастосунку пушів -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Family Flow" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   </head>
   <body>
     <div id="root"></div>

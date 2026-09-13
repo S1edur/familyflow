@@ -2,19 +2,20 @@ import { Link } from 'react-router-dom'
 import { Avatar, Icon, Rows, SectionTitle } from '../ui'
 import { useDB, setMe } from '../data/store'
 import { AccountCard } from '../components/AccountCard'
+import { PushSettings } from '../components/PushSettings'
 
 /**
  * «Ще» — це хаб навігації, а не місце, де налаштовують сутності.
- * Конверти редагуються в «Місяці», фонди на «Фондах», борги на «Боргах»,
- * шаблони на «Задачах». Тут лише те, що не має свого екрана,
- * і вхід до розділів, яких немає в таб-барі.
+ * Конверти редагуються на «Конвертах», правила на «Платежах», фонди на
+ * «Фондах», борги на «Боргах», шаблони на «Задачах». Тут лише те, що не має
+ * свого екрана, і вхід до розділів, яких немає в таб-барі.
  */
 const SCREENS = [
-  { to: '/envelopes', label: 'Конверти', hint: 'Скільки на що цього місяця', icon: Icon.wallet },
-  { to: '/bills',     label: 'Платежі',  hint: 'Чекліст місяця і регулярні правила', icon: Icon.clock },
-  { to: '/funds',   label: 'Фонди',   hint: 'Цілі й скільки відкладати щомісяця',   icon: Icon.piggy },
-  { to: '/debts',   label: 'Борги',   hint: 'Залишок, платежі, дата закриття',      icon: Icon.list },
-  { to: '/history', label: 'Історія', hint: 'Усі записи, з правкою і видаленням',   icon: Icon.clock },
+  { to: '/envelopes', label: 'Конверти', hint: 'Скільки на що цього місяця',          icon: Icon.wallet },
+  { to: '/bills',     label: 'Платежі',  hint: 'Чекліст місяця і регулярні правила',  icon: Icon.calendar },
+  { to: '/funds',     label: 'Фонди',    hint: 'Цілі й скільки відкладати щомісяця',  icon: Icon.piggy },
+  { to: '/debts',     label: 'Борги',    hint: 'Залишок, платежі, дата закриття',     icon: Icon.list },
+  { to: '/history',   label: 'Історія',  hint: 'Усі записи, з правкою і видаленням',  icon: Icon.clock },
 ]
 
 export default function Settings() {
@@ -72,10 +73,12 @@ export default function Settings() {
         </li>
       </Rows>
 
+      <div className="px-4 sm:px-6 mt-6"><PushSettings /></div>
+
       <p className="px-4 sm:px-6 mt-4 text-[12.5px] text-faint leading-snug">
-        Конверти й регулярні платежі редагуються в «Місяці», фонди — на «Фондах»,
-        борги — на «Боргах», повторювані побутові задачі — на «Задачах».
-        Там, де їх видно.
+        Конверти редагуються на «Конвертах», регулярні платежі — на «Платежах»,
+        фонди — на «Фондах», борги — на «Боргах», повторювані побутові задачі —
+        на «Задачах». Там, де їх видно.
       </p>
     </div>
   )

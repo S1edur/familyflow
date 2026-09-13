@@ -5,6 +5,7 @@ import { useDB, setMe, notices } from '../data/store'
 import { readSeenAt, writeSeenAt } from '../lib/prefs'
 import { usePendingCount } from '../data/queue'
 import { drain } from '../data/store'
+import { PushSettings } from './PushSettings'
 
 /**
  * Назви екранів живуть тут, а не в самих сторінках: топ-бар забрав заголовки,
@@ -161,6 +162,8 @@ export function TopBar() {
             Тут лише ваші справи. Про чуже прострочене застосунок не повідомляє.
           </p>
         </>}
+
+        <div className="mt-4"><PushSettings /></div>
       </Sheet>
     </header>
   )
