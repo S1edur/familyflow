@@ -10,3 +10,6 @@ tsconfig.tsbuildinfo
 
 # Матеріал для читання, не частина застосунку
 design-system-other project/
+
+# Локальні документи для себе — не в репозиторій
+docs/private/
