@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, IconButton, Input, MoneyInput, Progress, SectionTitle, Segmented, Sheet,
+  Icon, IconButton, Input, MoneyInput, Progress, SectionTitle, Segmented, Sheet, Select,
 } from '../ui'
 import {
   useDB, fundStatus, fundBalance, addFund, updateFund, archiveFund, spendFromFund, addEntry,
@@ -40,11 +40,15 @@ interface Draft {
   dueDate?: string
   bufferPct: number
   monthlyFixedMinor: number
+  /** Порожній рядок = не нагадувати. */
+  envelopeId: string
+  contributionDay: number
 }
 
 const emptyDraft = (): Draft => ({
   name: '', kind: 'sinking', currency: 'UAH', mode: 'goal',
   targetMinor: 0, dueDate: undefined, bufferPct: 0, monthlyFixedMinor: 0,
+  envelopeId: '', contributionDay: 1,
 })
 
 const draftOf = (f: Fund): Draft => ({
@@ -56,6 +60,8 @@ const draftOf = (f: Fund): Draft => ({
   dueDate: f.dueDate,
   bufferPct: f.bufferPct ?? 0,
   monthlyFixedMinor: f.monthlyFixedMinor ?? 0,
+  envelopeId: f.envelopeId ?? '',
+  contributionDay: f.contributionDay ?? 1,
 })
 
 /**
@@ -136,6 +142,10 @@ export default function Funds() {
       dueDate: goal ? draft.dueDate : undefined,
       bufferPct: goal && draft.bufferPct > 0 ? draft.bufferPct : undefined,
       monthlyFixedMinor: goal ? undefined : draft.monthlyFixedMinor,
+      // Порожній конверт означає «не нагадувати»: саме він вмикає
+      // породження щомісячного платежу в чеклісті.
+      envelopeId: draft.envelopeId || undefined,
+      contributionDay: draft.envelopeId ? draft.contributionDay : undefined,
     }
     if (editing) updateFund(editing.id, shape)
     else addFund(shape)
@@ -291,6 +301,35 @@ export default function Funds() {
                      onChange={v => set('kind', v)}
                      items={KINDS.map(k => ({ value: k.value, label: k.label }))} />
         </Field>
+
+        {/* Нагадування: фонд перестає бути місцем, куди треба не забути зайти,
+            і стає рядком у чеклісті місяця — як рахунок. */}
+        <Field label="Нагадувати щомісяця"
+          hint={draft.envelopeId
+            ? 'Внесок зʼявиться в чеклісті місяця й у задачах. Суму перерахуємо щоразу заново.'
+            : 'Без конверта внесок доведеться вносити руками, коли згадаєте.'}>
+          <Select
+            value={draft.envelopeId}
+            onChange={v => setDraft(d => ({ ...d, envelopeId: v }))}
+            placeholder="Не нагадувати"
+            options={db.envelopes
+              .filter(e => !e.archived && e.kind !== 'income')
+              .sort((a, b) => a.sortOrder - b.sortOrder)
+              .map(e => ({ value: e.id, label: e.name }))}
+          />
+        </Field>
+
+        {draft.envelopeId && (
+          <Field label="Якого числа" hint="Коли платіж зʼявиться в чеклісті.">
+            <Select
+              value={String(draft.contributionDay)}
+              onChange={v => setDraft(d => ({ ...d, contributionDay: Number(v) }))}
+              options={Array.from({ length: 28 }, (_, i) => ({
+                value: String(i + 1), label: `${i + 1} числа`,
+              }))}
+            />
+          </Field>
+        )}
 
         <Field label="Валюта" hint="Фонд збирається і витрачається в цій валюті.">
           <Segmented full label="Валюта" value={draft.currency}

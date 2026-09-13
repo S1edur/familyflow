@@ -79,16 +79,16 @@ export const RECURRING: Entity<'recurringPlans'> = {
 
 export const OCCURRENCES: Entity<'occurrences'> = {
   key: 'occurrences', table: 'occurrences',
-  columns: 'id, recurring_plan_id, envelope_id, name, due_date, expected_amount_minor, currency, status, assignee_id, paid_on, actual_amount_minor, paid_by, note',
+  columns: 'id, recurring_plan_id, envelope_id, fund_id, name, due_date, expected_amount_minor, currency, status, assignee_id, paid_on, actual_amount_minor, paid_by, note',
   toRow: (o: Occurrence, h) => ({
     id: o.id, household_id: h, recurring_plan_id: o.planId ?? null,
-    envelope_id: o.envelopeId, name: o.name, due_date: o.dueDate,
+    envelope_id: o.envelopeId, fund_id: o.fundId ?? null, name: o.name, due_date: o.dueDate,
     expected_amount_minor: o.expectedMinor, currency: o.currency, status: o.status,
     assignee_id: o.assigneeId ?? null, paid_on: o.paidOn ?? null,
     actual_amount_minor: o.actualMinor ?? null, paid_by: o.paidBy ?? null, note: o.note ?? null,
   }),
   fromRow: (r): Occurrence => ({
-    id: r.id, planId: nn(r.recurring_plan_id), envelopeId: r.envelope_id, name: r.name,
+    id: r.id, planId: nn(r.recurring_plan_id), envelopeId: r.envelope_id, fundId: nn(r.fund_id), name: r.name,
     dueDate: String(r.due_date).slice(0, 10), expectedMinor: r.expected_amount_minor,
     currency: r.currency, status: r.status, assigneeId: nn(r.assignee_id),
     paidOn: r.paid_on ? String(r.paid_on).slice(0, 10) : undefined,
@@ -119,19 +119,23 @@ export const ENTRIES: Entity<'entries'> = {
 
 export const FUNDS: Entity<'funds'> = {
   key: 'funds', table: 'funds',
-  columns: 'id, name, kind, currency, target_amount_minor, due_date, monthly_fixed_minor, buffer_pct, linked_recurring_plan_id, priority, is_archived',
+  columns: 'id, name, kind, currency, target_amount_minor, due_date, monthly_fixed_minor, buffer_pct, linked_recurring_plan_id, envelope_id, contribution_day, priority, is_archived',
   toRow: (f: Fund, h) => ({
     id: f.id, household_id: h, name: f.name, kind: f.kind, currency: f.currency,
     target_amount_minor: f.targetMinor ?? null, due_date: f.dueDate ?? null,
     monthly_fixed_minor: f.monthlyFixedMinor ?? null, buffer_pct: f.bufferPct ?? 0,
-    linked_recurring_plan_id: f.linkedPlanId ?? null, priority: f.priority, is_archived: !!f.archived,
+    linked_recurring_plan_id: f.linkedPlanId ?? null,
+    envelope_id: f.envelopeId ?? null, contribution_day: f.contributionDay ?? null,
+    priority: f.priority, is_archived: !!f.archived,
   }),
   fromRow: (r): Fund => ({
     id: r.id, name: r.name, kind: r.kind, currency: r.currency,
     targetMinor: nn(r.target_amount_minor),
     dueDate: r.due_date ? String(r.due_date).slice(0, 10) : undefined,
     monthlyFixedMinor: nn(r.monthly_fixed_minor), bufferPct: nn(r.buffer_pct),
-    linkedPlanId: nn(r.linked_recurring_plan_id), priority: r.priority,
+    linkedPlanId: nn(r.linked_recurring_plan_id),
+    envelopeId: nn(r.envelope_id), contributionDay: nn(r.contribution_day),
+    priority: r.priority,
     archived: r.is_archived || undefined,
   }),
 }

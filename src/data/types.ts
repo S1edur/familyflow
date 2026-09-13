@@ -81,6 +81,7 @@ export interface Occurrence extends Synced {
   expectedMinor: number
   currency: Currency
   status: OccurrenceStatus
+  fundId?: ID           // фонд, який цей платіж ПОПОВНЮЄ (протилежне до RecurringPlan.fundId)
   assigneeId?: ID
   paidOn?: string
   actualMinor?: number
@@ -115,6 +116,8 @@ export interface Fund extends Synced {
   monthlyFixedMinor?: number
   bufferPct?: number
   linkedPlanId?: ID
+  envelopeId?: ID       // конверт, до якого належить внесок; порожній => не нагадуємо
+  contributionDay?: number  // число місяця для нагадування, за замовчуванням 1
   priority: number
   archived?: boolean
 }

@@ -6,9 +6,11 @@
  * does not exist`. Схема іменує частину полів за стандартом iCalendar —
  * bymonthday, byday, bymonth, без підкреслень, — і сплутати їх дуже легко.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 
-const schema = readFileSync('sql/01_schema.sql', 'utf8')
+// Усі міграції, не лише перша: колонки додаються й пізніше.
+const files = readdirSync('sql').filter(f => f.endsWith('.sql')).sort()
+const schema = files.map(f => readFileSync(`sql/${f}`, 'utf8')).join('\n')
 const map = readFileSync('src/data/cloud-map.ts', 'utf8')
 
 const real = new Map()
@@ -22,6 +24,23 @@ for (const m of schema.matchAll(/create table (\w+) \(\n(.*?)\n\);/gs)) {
     if (c) cols.add(c[1])
   }
   real.set(m[1], cols)
+}
+
+// alter table X add column [if not exists] Y ...
+for (const m of schema.matchAll(/alter table (?:public\.)?(\w+)\s+add column\s+(?:if not exists\s+)?(\w+)/gi)) {
+  const [, table, col] = m
+  if (!real.has(table)) real.set(table, new Set())
+  real.get(table).add(col)
+}
+
+// Колонки, які додаються в циклі DO $$ ... foreach по масиву таблиць
+for (const block of schema.matchAll(/tables text\[\] := array\[(.*?)\];(.*?)end \$\$;/gs)) {
+  const tables = [...block[1].matchAll(/'(\w+)'/g)].map(x => x[1])
+  const cols = [...block[2].matchAll(/add column if not exists (\w+)/g)].map(x => x[1])
+  for (const t of tables) {
+    if (!real.has(t)) real.set(t, new Set())
+    for (const c of cols) real.get(t).add(c)
+  }
 }
 
 let bad = 0

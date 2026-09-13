@@ -242,6 +242,38 @@ function materialize(d: DB): DB {
     if (o.status === 'projected' && o.dueDate <= t) o.status = 'due'
   }
 
+  // Внески у фонди — такі самі платежі, як рахунки.
+  // Сума ПОХІДНА: fundStatus рахує її щомісяця заново, бо вона залежить від
+  // того, скільки вже зібрано і скільки місяців лишилось. Тому перезаписуємо
+  // очікування на ще не підтверджених — інакше в чеклісті висіла б цифра,
+  // порахована місяць тому.
+  for (const f of d.funds) {
+    if (f.archived || !f.envelopeId) continue
+    const day = f.contributionDay ?? 1
+    const cur = parse(t.slice(0, 8) + '01')
+    for (let i = 0; i < HORIZON_MONTHS; i++) {
+      const y = cur.getFullYear(), m1 = cur.getMonth() + 1
+      const dd = clampDayOfMonth(y, m1, day)
+      const date = `${y}-${String(m1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+      const id = stableId(`fund:${f.id}:${date}`)
+      const existing = d.occurrences.find(o => o.id === id)
+      const required = fundStatus(d, f.id).required
+
+      if (!existing) {
+        if (required > 0) {
+          d.occurrences.push({
+            id, envelopeId: f.envelopeId, fundId: f.id, name: f.name,
+            dueDate: date, expectedMinor: required, currency: f.currency,
+            status: date <= t ? 'due' : 'projected',
+          })
+        }
+      } else if (existing.status !== 'paid' && existing.status !== 'skipped') {
+        existing.expectedMinor = required
+      }
+      cur.setMonth(cur.getMonth() + 1)
+    }
+  }
+
   // задачі з шаблонів
   const taskKeys = new Set(d.tasks.filter(x => x.templateId).map(x => `${x.templateId}|${x.occurrenceKey}`))
   for (const tpl of d.taskTemplates) {
@@ -452,8 +484,11 @@ export function monthSummary(d: DB, month: string) {
     .filter(o => o.status !== 'skipped')
     .reduce((s, o) => s + (o.status === 'paid' ? (o.actualMinor ?? o.expectedMinor) : o.expectedMinor), 0)
 
+  // Фонди з конвертом уже породили платежі й сидять в obligationsAll —
+  // рахувати їх ще й тут означало б відняти двічі. Окремим рядком лишаються
+  // тільки ті, що не автоматизовані.
   const fundsRequired = d.funds
-    .filter(f => !f.archived)
+    .filter(f => !f.archived && !f.envelopeId)
     .reduce((s, f) => s + fundStatus(d, f.id).required, 0)
 
   const spentVariable = d.entries
@@ -600,12 +635,15 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
     d.entries.push({
       id: entryId,
       // Конверт уже каже, відтік це чи надходження — окреме поле в плані зайве.
-      kind: plan0?.debtId ? 'debt_payment'
+      // Тип руху грошей визначає те, з чим платіж повʼязаний. Одне правило
+      // на всі випадки: поповнення фонду, гасіння боргу, дохід, витрата.
+      kind: o.fundId ? 'fund_in'
+        : plan0?.debtId ? 'debt_payment'
         : d.envelopes.find(e => e.id === o.envelopeId)?.kind === 'income' ? 'income'
         : 'expense',
       occurredOn: on, amountMinor: amt, currency: o.currency,
       rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
-      envelopeId: o.envelopeId, debtId: plan0?.debtId,
+      envelopeId: o.envelopeId, debtId: plan0?.debtId, fundId: o.fundId,
       occurrenceId: o.id, note: o.name, createdBy: d.meId,
     })
     o.status = 'paid'; o.paidOn = on; o.actualMinor = amt; o.paidBy = d.meId
