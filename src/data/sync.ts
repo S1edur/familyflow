@@ -124,3 +124,33 @@ export async function pushMembers(
     }
   }
 }
+
+/* ───────────────────────── реалтайм ───────────────────────── */
+
+/**
+ * Слухає зміни в домі й кличе onChange.
+ *
+ * Свідомо НЕ застосовуємо прилетілий рядок точково: подія може прийти
+ * посеред нашої власної відправки, і часткове накладання дало б стан,
+ * якого не було ні в кого. Замість цього просто перетягуємо все —
+ * запит дешевий, а результат завжди цілісний.
+ *
+ * Зміни, зроблені нами самими, теж повертаються луною. Відсіювати їх
+ * за автором не можна: не всі таблиці мають автора. Тому просто
+ * перетягуємо — зайвий раз, але без розбіжностей.
+ */
+export function watchHousehold(householdId: string, onChange: () => void): () => void {
+  const db = cloud()
+  const channel = db.channel(`household:${householdId}`)
+
+  for (const e of ENTITIES) {
+    channel.on(
+      'postgres_changes' as any,
+      { event: '*', schema: 'public', table: e.table, filter: `household_id=eq.${householdId}` },
+      onChange,
+    )
+  }
+
+  channel.subscribe()
+  return () => { void db.removeChannel(channel) }
+}

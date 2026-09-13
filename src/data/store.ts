@@ -8,7 +8,7 @@ import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
 import { money, toBase } from '../lib/money'
-import { pullAll, pullRates, pushDiff, pushMembers, pushRates } from './sync'
+import { pullAll, pullRates, pushDiff, pushMembers, pushRates, watchHousehold } from './sync'
 import { drop, enqueue, peek, queueSize, clearQueue } from './queue'
 
 const KEY = 'familyflow.v1'
@@ -105,6 +105,25 @@ const BOUND_KEY = 'ff.boundTo'
  *
  * Той самий механізм спрацьовує при зміні акаунта: інший дім — інші дані.
  */
+let unwatch: (() => void) | null = null
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Перетягнути все з бази поверх локального.
+ *
+ * Не чіпає чергу: те, що в ній лежить, ще не доїхало, і його стан
+ * тут не представлений. Тому спершу спорожнюємо чергу, а вже потім
+ * приймаємо чужі зміни — інакше свіжа правка партнера затерла б нашу,
+ * яка просто не встигла відправитись.
+ */
+async function refresh(id: ID) {
+  await drain()
+  if (queueSize() > 0) return          // щось не доїхало — не затираємо себе
+  const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
+  db = materialize({ ...db, ...cloud, rates: { ...db.rates, ...rates } })
+  emit()
+}
+
 export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   let bound: string | null = null
   try { bound = localStorage.getItem(BOUND_KEY) } catch { /* приватний режим */ }
@@ -126,6 +145,15 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   db = withGenerated
   householdId = id
   emit()
+
+  // Зміни партнера приходять самі. Події збираємо в пачку: одна дія
+  // партнера — це кілька рядків у кількох таблицях, і тягнути на кожен
+  // означало б десяток запитів замість одного.
+  unwatch?.()
+  unwatch = watchHousehold(id, () => {
+    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(() => { void refresh(id) }, 400)
+  })
 
   await pushDiff(pulled, withGenerated, id).catch((e: unknown) => {
     console.error('Не вдалось відправити згенероване:', e instanceof Error ? e.message : e)
