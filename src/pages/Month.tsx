@@ -1,15 +1,20 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions, Icon, IconButton,
-  Input, ListRow, MoneyInput, Pill, Progress, SectionTitle, Segmented, Select, Sheet,
-  Stat, Switch, Tabs,
+  AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions, Icon,
+  IconButton, Input, LinkChip, LinkGroup, LinkRow, ListRow, MoneyInput, Pill, Progress,
+  SectionTitle, Segmented, Select, Sheet, Stat, Switch, Tabs, toast, useSheet,
 } from '../ui'
 import {
   useDB, envelopeMonth, monthSummary, setPlanned,
   confirmOccurrence, skipOccurrence, unconfirmOccurrence, addOccurrence,
   addEnvelope, updateEnvelope, archiveEnvelope, reorderEnvelope,
-  addRecurringPlan, updateRecurringPlan, removeRecurringPlan,
- isIncomeOccurrence, fundStatus, debtStatus } from '../data/store'
+  addRecurringPlan, updateRecurringPlan, removeRecurringPlan, updateFund,
+ isIncomeOccurrence, fundStatus } from '../data/store'
+import {
+  DOW, debtRoute, envelopeAsk, envelopeRoute, envelopeSources, fundRoute, nextDue, ruleRoute,
+  ruleText, unlinkedFunds,
+} from '../data/links'
 import { money, parseAmount } from '../lib/money'
 import {
   addMonths, clampDayOfMonth, iso, isoDow, longDate, monthKey, monthTitle, parse,
@@ -86,52 +91,12 @@ function swap(list: Envelope[], i: number, dir: -1 | 1) {
 
 /* ═══════════════════ правила: людська мова ═══════════════════ */
 
-/* Дні тижня — це текст інтерфейсу, а не робота з датами:
-   номер дня завжди дає isoDow() з lib/dates (1=Пн .. 7=Нд). */
-const DOW = [
-  { n: 1, short: 'Пн', every: 'щопонеділка' },
-  { n: 2, short: 'Вт', every: 'щовівторка' },
-  { n: 3, short: 'Ср', every: 'щосереди' },
-  { n: 4, short: 'Чт', every: 'щочетверга' },
-  { n: 5, short: 'Пт', every: 'щоп’ятниці' },
-  { n: 6, short: 'Сб', every: 'щосуботи' },
-  { n: 7, short: 'Нд', every: 'щонеділі' },
-]
-
 const FREQ_ITEMS: { value: Freq; label: string }[] = [
   { value: 'monthly', label: 'Щомісяця' },
   { value: 'weekly', label: 'Щотижня' },
   { value: 'yearly', label: 'Щороку' },
   { value: 'daily', label: 'Щодня' },
 ]
-
-function joinUa(parts: string[]) {
-  if (parts.length <= 1) return parts[0] ?? ''
-  return parts.slice(0, -1).join(', ') + ' і ' + parts[parts.length - 1]
-}
-
-/** Правило людською мовою — головне, що має бути видно в рядку. */
-function ruleText(p: RecurringPlan): string {
-  const a = parse(p.anchorDate)
-
-  if (p.freq === 'daily') return 'щодня'
-
-  if (p.freq === 'weekly') {
-    const days = [...(p.byDay?.length ? p.byDay : [isoDow(p.anchorDate)])].sort((x, y) => x - y)
-    if (days.length >= 7) return 'щодня'
-    return joinUa(days.map(n => DOW.find(d => d.n === n)?.every ?? ''))
-  }
-
-  if (p.freq === 'yearly') {
-    const m1 = p.byMonth ?? a.getMonth() + 1
-    const year = a.getFullYear()
-    const day = clampDayOfMonth(year, m1, p.byMonthDay ?? a.getDate())
-    // longDate → «12 лютого, пн»; для правила день тижня зайвий
-    return `${longDate(iso(new Date(year, m1 - 1, day))).split(',')[0]} щороку`
-  }
-
-  return `${p.byMonthDay ?? a.getDate()} числа щомісяця`
-}
 
 /** 29–31 числа: у коротких місяцях платіж з'їжджає на останній день. */
 function shortMonthNote(freq: Freq, day: number) {
@@ -142,19 +107,16 @@ function shortMonthNote(freq: Freq, day: number) {
     : 'Якщо такого числа немає — останній день місяця.'
 }
 
-/** Найближчий ще не оплачений платіж цього плану. Рахується на читанні. */
-function nextDue(db: DB, planId: string) {
-  return db.occurrences
-    .filter(o => o.planId === planId && (o.status === 'due' || o.status === 'projected'))
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
-}
-
 /* ═══════════════════ екран ═══════════════════ */
 
 export default function Month() {
   const db = useDB()
   const [month, setMonth] = useState(thisMonth())
-  const [tab, setTab] = useState<'plan' | 'bills'>('plan')
+  // вкладка теж в адресі: посилання на правило веде одразу у «Платежі»
+  const [tabParam, setTabParam] = useSheet('tab')
+  const tab: 'plan' | 'bills' = tabParam === 'bills' ? 'bills' : 'plan'
+  const setTab = (v: 'plan' | 'bills') =>
+    setTabParam(v === 'bills' ? 'bills' : null, { env: null, rule: null })
   const sum = monthSummary(db, month)
 
   const bills = useMemo(() => db.occurrences
@@ -217,7 +179,12 @@ export default function Month() {
 /* ═══════════════════ вкладка «План» ═══════════════════ */
 
 function PlanTab({ db, month }: { db: DB; month: string }) {
-  const [editing, setEditing] = useState<Envelope | 'new' | null>(null)
+  const [envParam, setEnvParam] = useSheet('env')
+  const editing: Envelope | 'new' | null = envParam === 'new'
+    ? 'new'
+    : envParam ? (db.envelopes.find(e => e.id === envParam) ?? null) : null
+  const setEditing = (v: Envelope | 'new' | null) =>
+    setEnvParam(v === null ? null : v === 'new' ? 'new' : v.id)
   const [reordering, setReordering] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
 
@@ -273,6 +240,8 @@ function PlanTab({ db, month }: { db: DB; month: string }) {
                   env={r.envelope}
                   planned={r.planned}
                   actual={r.actual}
+                  auto={envelopeAsk(db, r.envelope.id, month).open}
+                  sources={envelopeSources(db, r.envelope.id).length}
                   ownerName={db.members.find(m => m.id === r.envelope.ownerId)?.name}
                   reordering={reordering}
                   onCommit={v => setPlanned(r.envelope.id, month, v)}
@@ -343,6 +312,7 @@ function PlanTab({ db, month }: { db: DB; month: string }) {
             key={editing === 'new' ? 'new' : editing.id}
             env={editing === 'new' ? null : editing}
             db={db}
+            month={month}
             onDone={() => setEditing(null)} />
         )}
       </Sheet>
@@ -350,20 +320,31 @@ function PlanTab({ db, month }: { db: DB; month: string }) {
   )
 }
 
-function PlanRow({ env, planned, actual, ownerName, reordering, onCommit, onOpen, onUp, onDown }: {
-  env: Envelope; planned: number; actual: number; ownerName?: string
+/**
+ * Рядок плану. Крім факту проти плану показує, скільки з місяця вже розписано
+ * автоматикою — блідим сегментом на смужці і підписом «авто». Без цього
+ * незрозуміло, чому конверт «порожній», хоч насправді за нього вже все вирішено.
+ */
+function PlanRow({ env, planned, actual, auto, sources, ownerName, reordering, onCommit, onOpen, onUp, onDown }: {
+  env: Envelope; planned: number; actual: number; auto: number; sources: number; ownerName?: string
   reordering: boolean
   onCommit: (v: number) => void
   onOpen: () => void
   onUp?: () => void
   onDown?: () => void
 }) {
+  const over = planned > 0 && actual > planned
+  const short = planned > 0 && actual + auto > planned
+
   return (
     <li className="px-4 sm:px-6 py-2.5">
       <div className="flex items-center gap-3">
         <button type="button" onClick={onOpen}
           className="flex-1 min-w-0 flex items-center gap-2 text-left rounded-md hover:text-accent transition-colors">
           <span className="text-[14px] truncate">{env.name}</span>
+          {sources > 0 && (
+            <span className="shrink-0 text-faint" title={`Надходить сюди само: ${sources}`}>{Icon.clock(13)}</span>
+          )}
           {ownerName && <Badge>{ownerName}</Badge>}
         </button>
 
@@ -386,10 +367,22 @@ function PlanRow({ env, planned, actual, ownerName, reordering, onCommit, onOpen
       </div>
 
       {!reordering && (
-        <div className="mt-1.5">
-          <Progress value={planned ? actual / planned : 0}
-            tone={planned && actual > planned ? 'warn' : 'accent'} height={4} />
-        </div>
+        <>
+          <div className="mt-1.5">
+            <Progress
+              value={planned ? actual / planned : 0}
+              pending={planned ? auto / planned : 0}
+              tone={over ? 'warn' : 'accent'} height={4} />
+          </div>
+          {auto > 0 && (
+            <div className="mt-1 text-[11.5px] text-faint num">
+              <span className={short && !over ? 'text-warn' : undefined}>
+                ще {money(auto)} автоматом
+              </span>
+              {short && !over && <span className="text-faint"> · більше за план</span>}
+            </div>
+          )}
+        </>
       )}
     </li>
   )
@@ -412,82 +405,84 @@ function PlanInput({ value, onCommit }: { value: number; onCommit: (v: number) =
 }
 
 /**
- * Що проходить через конверт САМО, без ручного вводу.
+ * Що проходить через конверт САМО — і як це звідси змінити.
  *
  * Це відповідь на «а чим конверт відрізняється від фонду й боргу»: конверт
  * не робить нічого сам, він ПРИЙМАЄ. Фонд, борг і регулярне правило —
- * це джерела, які в нього щомісяця щось кладуть. Побачивши їх поруч,
- * стає зрозуміло, звідки береться цифра в плані.
+ * джерела, які в нього щомісяця щось кладуть.
+ *
+ * Головне тут — не список, а те, що кожен рядок ВЕДЕ до свого джерела, а
+ * привʼязати нове можна не виходячи з конверта. Доти правило жило тільки там,
+ * де його завели, і конверт про нього лише повідомляв.
  */
-function Automatic({ env, db }: { env: Envelope; db: DB }) {
-  const t = today()
-  const month = monthKey(t)
+function EnvelopeLinks({ env, db, month }: { env: Envelope; db: DB; month: string }) {
+  const nav = useNavigate()
+  const [attach, setAttach] = useState(false)
+  const [fundId, setFundId] = useState<ID | ''>('')
+  const [day, setDay] = useState(1)
 
-  const funds = db.funds.filter(f => !f.archived && f.envelopeId === env.id)
-  const plans = db.recurringPlans.filter(p => p.active && p.envelopeId === env.id)
-  const debts = env.kind === 'debt' ? db.debts.filter(d => !d.closedOn) : []
+  const sources = envelopeSources(db, env.id)
+  const ask = envelopeAsk(db, env.id, month)
+  const free = unlinkedFunds(db)
 
-  // скільки цей конверт попросить цього місяця — сума його відкритих платежів
-  const thisMonth = db.occurrences
-    .filter(o => o.envelopeId === env.id && monthKey(o.dueDate) === month
-      && (o.status === 'due' || o.status === 'projected'))
-    .reduce((s, o) => s + o.expectedMinor, 0)
-
-  if (!funds.length && !plans.length && !debts.length) {
-    return (
-      <Card className="mb-4">
-        <div className="text-[12.5px] text-muted leading-snug">
-          Сюди нічого не надходить автоматично — витрати потрапляють лише
-          швидким записом. Щоб конверт сам нагадував, привʼяжіть до нього
-          фонд або створіть регулярний платіж.
-        </div>
-      </Card>
-    )
+  const attachFund = () => {
+    const f = db.funds.find(x => x.id === fundId)
+    if (!f) return
+    updateFund(f.id, { envelopeId: env.id, contributionDay: day })
+    setAttach(false); setFundId(''); setDay(1)
+    toast(`«${f.name}» нагадує ${day} числа`)
   }
 
-  return (
-    <Card className="mb-4">
-      <div className="flex items-baseline justify-between gap-2 mb-2">
-        <div className="text-[11.5px] uppercase tracking-wider text-faint">Надходить сюди само</div>
-        {thisMonth > 0 && (
-          <div className="text-[13px] num text-muted">
-            цього місяця <span className="text-ink">{money(thisMonth)}</span>
-          </div>
-        )}
-      </div>
+  const actions = (
+    <>
+      <AttachButton onClick={() => nav(`/month?tab=bills&rule=new&env=${env.id}`)}>
+        Регулярний платіж
+      </AttachButton>
+      {free.length > 0
+        ? <AttachButton onClick={() => { setAttach(true); setFundId(free[0].id) }}>Фонд</AttachButton>
+        : <AttachButton onClick={() => nav(`/funds?fund=new&env=${env.id}`)}>Новий фонд</AttachButton>}
+      {env.kind === 'debt' && <AttachButton onClick={() => nav('/debts?debt=new')}>Борг</AttachButton>}
+    </>
+  )
 
-      <ul className="space-y-1.5">
-        {funds.map(f => (
-          <li key={f.id} className="flex items-center gap-2 text-[13px]">
-            <span className="text-faint shrink-0">{Icon.piggy(14)}</span>
-            <span className="flex-1 min-w-0 truncate">{f.name}</span>
-            <span className="shrink-0 num text-faint">
-              {money(fundStatus(db, f.id).required, f.currency)} / міс
-            </span>
-          </li>
-        ))}
-        {plans.map(p => (
-          <li key={p.id} className="flex items-center gap-2 text-[13px]">
-            <span className="text-faint shrink-0">{Icon.wallet(14)}</span>
-            <span className="flex-1 min-w-0 truncate">{p.name}</span>
-            <span className="shrink-0 num text-faint">{money(p.expectedMinor, p.currency)}</span>
-          </li>
-        ))}
-        {debts.map(d => (
-          <li key={d.id} className="flex items-center gap-2 text-[13px]">
-            <span className="text-faint shrink-0">{Icon.list(14)}</span>
-            <span className="flex-1 min-w-0 truncate">{d.name}</span>
-            <span className="shrink-0 num text-faint">
-              лишилось {money(debtStatus(db, d.id).remaining, d.currency)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </Card>
+  return (
+    <LinkGroup
+      title="Надходить сюди само"
+      summary={ask.auto > 0
+        ? <>цього місяця <span className="text-ink">{money(ask.auto)}</span></>
+        : undefined}
+      hint={sources.length
+        ? undefined
+        : 'Витрати сюди потрапляють лише швидким записом. Привʼяжіть фонд або створіть регулярний платіж — і конверт сам нагадає про себе в чеклісті місяця.'}
+      actions={attach ? undefined : actions}>
+
+      {sources.map(l => (
+        <LinkRow key={l.key} link={l} onOpen={() => nav(l.to)} />
+      ))}
+
+      {attach && (
+        <div className="rounded-lg border border-line bg-surface p-2.5 mt-1">
+          <Field label="Який фонд" hint="Внесок зʼявиться в чеклісті місяця й у задачах.">
+            <Select<ID> value={fundId} onChange={setFundId}
+              options={free.map(f => ({ value: f.id, label: f.name }))} />
+          </Field>
+          <Field label="Якого числа">
+            <Select value={String(day)} onChange={v => setDay(Number(v))}
+              options={Array.from({ length: 28 }, (_, i) => ({ value: String(i + 1), label: `${i + 1} числа` }))} />
+          </Field>
+          <div className="flex gap-2 mt-1">
+            <Btn variant="primary" onClick={attachFund} disabled={!fundId}>Привʼязати</Btn>
+            <Btn variant="quiet" onClick={() => setAttach(false)}>Скасувати</Btn>
+          </div>
+        </div>
+      )}
+    </LinkGroup>
   )
 }
 
-function EnvelopeForm({ env, db, onDone }: { env: Envelope | null; db: DB; onDone: () => void }) {
+function EnvelopeForm({ env, db, month, onDone }: {
+  env: Envelope | null; db: DB; month: string; onDone: () => void
+}) {
   const [name, setName] = useState(env?.name ?? '')
   const [kind, setKind] = useState<EnvelopeKind>(env?.kind ?? 'variable')
   const [ownerId, setOwnerId] = useState<ID | ''>(env?.ownerId ?? '')
@@ -515,7 +510,7 @@ function EnvelopeForm({ env, db, onDone }: { env: Envelope | null; db: DB; onDon
 
   return (
     <div>
-      {env && <Automatic env={env} db={db} />}
+      {env && <EnvelopeLinks env={env} db={db} month={month} />}
 
       <Field label="Назва" htmlFor="env-name"
         error={duplicate ? 'Конверт з такою назвою вже є' : undefined}
@@ -567,7 +562,15 @@ function EnvelopeForm({ env, db, onDone }: { env: Envelope | null; db: DB; onDon
 /* ═══════════════════ вкладка «Платежі» ═══════════════════ */
 
 function BillsTab({ db, month, bills }: { db: DB; month: string; bills: Occurrence[] }) {
-  const [rule, setRule] = useState<RecurringPlan | 'new' | null>(null)
+  const [ruleParam, setRuleParam] = useSheet('rule')
+  const [envParam] = useSheet('env')
+  const [debtParam] = useSheet('debt')
+  const rule: RecurringPlan | 'new' | null = ruleParam === 'new'
+    ? 'new'
+    : ruleParam ? (db.recurringPlans.find(p => p.id === ruleParam) ?? null) : null
+  // закриваючи лист, прибираємо й підказки, з яких він відкрився
+  const setRule = (v: RecurringPlan | 'new' | null) =>
+    setRuleParam(v === null ? null : v === 'new' ? 'new' : v.id, { env: null, debt: null })
   const [oneOff, setOneOff] = useState(false)
 
   const active = useMemo(() => db.recurringPlans.filter(p => p.active).sort((a, b) => {
@@ -658,6 +661,8 @@ function BillsTab({ db, month, bills }: { db: DB; month: string; bills: Occurren
             key={rule === 'new' ? 'new' : rule.id}
             db={db}
             editing={rule === 'new' ? null : rule}
+            presetEnvelopeId={rule === 'new' ? (envParam ?? undefined) : undefined}
+            presetDebtId={rule === 'new' ? (debtParam ?? undefined) : undefined}
             onDone={() => setRule(null)} />
         )}
       </Sheet>
@@ -670,10 +675,13 @@ function BillsTab({ db, month, bills }: { db: DB; month: string; bills: Occurren
 }
 
 function BillRow({ db, o }: { db: DB; o: Occurrence }) {
+  const nav = useNavigate()
   const [editing, setEditing] = useState(false)
   const [raw, setRaw] = useState('')
   const assignee = db.members.find(m => m.id === o.assigneeId)
   const plan = o.planId ? db.recurringPlans.find(p => p.id === o.planId) : undefined
+  const fund = o.fundId ? db.funds.find(f => f.id === o.fundId) : undefined
+  const envelope = db.envelopes.find(e => e.id === o.envelopeId)
   const settled = o.status === 'paid' || o.status === 'skipped'
   const overdue = o.status === 'due' && o.dueDate < today()
 
@@ -688,8 +696,6 @@ function BillRow({ db, o }: { db: DB; o: Occurrence }) {
             {o.status === 'paid' && <span> · оплачено {money(o.actualMinor ?? 0)}</span>}
             {o.status === 'skipped' && <span> · пропущено</span>}
             {assignee && !settled && <span> · {assignee.name}</span>}
-            {/* правило поруч із датою: інакше чекліст читається як випадкові числа */}
-            {plan && !settled && <span> · {ruleText(plan)}</span>}
           </div>
         </div>
         {!settled && <span className="text-[14px] num text-muted shrink-0">{money(o.expectedMinor, o.currency)}</span>}
@@ -701,6 +707,24 @@ function BillRow({ db, o }: { db: DB; o: Occurrence }) {
           </span>
         )}
       </div>
+
+      {!settled && (envelope || fund || plan) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {/* звідки цей платіж узявся і куди лягає — одним тапом, без пошуку по екранах */}
+          {fund
+            ? <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
+                внесок у «{fund.name}»
+              </LinkChip>
+            : plan && (
+                /* правило поруч із датою: інакше чекліст читається як випадкові
+                   числа. І воно ж веде в те правило. */
+                <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan.id))}>{ruleText(plan)}</LinkChip>
+              )}
+          {envelope && (
+            <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
+          )}
+        </div>
+      )}
 
       {!settled && (
         <div className="flex gap-1.5 mt-2">
@@ -728,7 +752,12 @@ function BillRow({ db, o }: { db: DB; o: Occurrence }) {
   )
 }
 
+/**
+ * Рядок правила. Назви конверта, фонду й боргу — не текст, а переходи:
+ * прочитавши «гасить Кредит», звідси можна одразу піти в той борг.
+ */
 function RuleRow({ db, p, onEdit }: { db: DB; p: RecurringPlan; onEdit: () => void }) {
+  const nav = useNavigate()
   const next = nextDue(db, p.id)
   const assignee = db.members.find(m => m.id === p.assigneeId)
   const fund = db.funds.find(f => f.id === p.fundId)
@@ -738,9 +767,8 @@ function RuleRow({ db, p, onEdit }: { db: DB; p: RecurringPlan; onEdit: () => vo
   const overdue = rel?.tone === 'over'
 
   return (
-    <li>
-      <button type="button" onClick={onEdit}
-        className="w-full text-left px-4 sm:px-6 py-2.5 hover:bg-surface2 transition-colors">
+    <li className="px-4 sm:px-6 py-2.5">
+      <button type="button" onClick={onEdit} className="w-full text-left">
         <div className="flex items-baseline gap-3">
           <span className={`flex-1 min-w-0 text-[14px] truncate ${p.active ? '' : 'text-muted'}`}>{p.name}</span>
           <span className="shrink-0 text-[14px] num text-muted">{money(p.expectedMinor, p.currency)}</span>
@@ -761,14 +789,27 @@ function RuleRow({ db, p, onEdit }: { db: DB; p: RecurringPlan; onEdit: () => vo
             </span>
           )}
           {p.active && !next && <span className="text-warn">майбутніх платежів немає</span>}
-          {envelope && <span>{envelope.name}</span>}
           {assignee && <span>{assignee.name}</span>}
           {p.amountMode === 'variable' && <Badge>сума плаває</Badge>}
-          {fund && <Badge tone="accent">з фонду «{fund.name}»</Badge>}
-          {debt && <Badge tone="accent">гасить «{debt.name}»</Badge>}
           {!p.active && <Badge tone="warn">вимкнено</Badge>}
         </div>
       </button>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {envelope && (
+          <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
+        )}
+        {fund && (
+          <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
+            з фонду «{fund.name}»
+          </LinkChip>
+        )}
+        {debt && (
+          <LinkChip icon="list" tone="accent" onClick={() => nav(debtRoute(debt.id))}>
+            гасить «{debt.name}»
+          </LinkChip>
+        )}
+      </div>
     </li>
   )
 }
@@ -814,8 +855,24 @@ function toDraft(p: RecurringPlan): Draft {
   }
 }
 
-function RuleForm({ db, editing, onDone }: { db: DB; editing: RecurringPlan | null; onDone: () => void }) {
-  const [draft, setDraft] = useState<Draft>(() => editing ? toDraft(editing) : emptyDraft())
+function RuleForm({ db, editing, presetEnvelopeId, presetDebtId, onDone }: {
+  db: DB; editing: RecurringPlan | null
+  presetEnvelopeId?: ID; presetDebtId?: ID
+  onDone: () => void
+}) {
+  // Правило, заведене з конверта або з боргу, уже знає, звідки прийшло —
+  // людина щойно там була, питати вдруге немає про що.
+  const preset = presetDebtId ? db.debts.find(x => x.id === presetDebtId) : undefined
+  const [draft, setDraft] = useState<Draft>(() => editing
+    ? toDraft(editing)
+    : {
+        ...emptyDraft(),
+        envelopeId: presetEnvelopeId ?? '',
+        debtId: presetDebtId ?? '',
+        name: preset ? preset.name : '',
+        currency: preset ? preset.currency : 'UAH',
+        expectedMinor: preset?.monthlyPaymentMinor ?? 0,
+      })
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }))
 
   const envelopes = db.envelopes

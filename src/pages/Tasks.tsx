@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, Input, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
+  Icon, Input, LinkChip, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
   Textarea, priorityLabel,
 } from '../ui'
 import {
@@ -10,6 +10,7 @@ import {
   fairness, confirmOccurrence, skipOccurrence, shoppingPending,
   addTaskTemplate, updateTaskTemplate, removeTaskTemplate,
  isIncomeOccurrence} from '../data/store'
+import { envelopeRoute, fundRoute, ruleRoute, ruleText } from '../data/links'
 import type { DB, ID, Occurrence, Priority, Task, TaskStatus, TaskTemplate } from '../data/types'
 import { money } from '../lib/money'
 import { addDays, relativeDue, shortDate, today } from '../lib/dates'
@@ -479,8 +480,11 @@ function BillRow({ occ, onOpen }: { occ: Occurrence; onOpen: () => void }) {
 
 function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => void }) {
   const db = useDB()
+  const nav = useNavigate()
   if (!occ) return null
   const envelope = db.envelopes.find(e => e.id === occ.envelopeId)
+  const fund = occ.fundId ? db.funds.find(f => f.id === occ.fundId) : undefined
+  const plan = occ.planId ? db.recurringPlans.find(p => p.id === occ.planId) : undefined
   const member = db.members.find(m => m.id === occ.assigneeId)
   const settled = occ.status === 'paid' || occ.status === 'skipped'
   const due = relativeDue(occ.dueDate)
@@ -496,13 +500,28 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
         {!settled && due.tone === 'over' && <span className="text-warn"> · прострочено</span>}
         {occ.status === 'paid' && <span> · оплачено</span>}
         {occ.status === 'skipped' && <span> · пропущено</span>}
-        {envelope && <span> · {envelope.name}</span>}
         {member && <span> · {member.name}</span>}
+      </div>
+
+      {/* звідки цей платіж і куди лягає — переходами, а не описом */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-4">
+        {fund && (
+          <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
+            внесок у «{fund.name}»
+          </LinkChip>
+        )}
+        {plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan.id))}>{ruleText(plan)}</LinkChip>}
+        {envelope && (
+          <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
+        )}
       </div>
 
       {settled ? (
         <div className="text-[13px] text-faint">
-          Змінити суму або скасувати підтвердження можна в розділі «Місяць».
+          Змінити суму або скасувати підтвердження — у чеклісті місяця.
+          <div className="mt-2">
+            <Btn onClick={() => nav('/month?tab=bills')}>Відкрити чекліст</Btn>
+          </div>
         </div>
       ) : (
         <>

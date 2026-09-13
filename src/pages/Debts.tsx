@@ -1,13 +1,16 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, IconButton, Input, MoneyInput, Progress, SectionTitle, Select, Sheet,
+  AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
+  Icon, IconButton, Input, LinkChip, LinkGroup, LinkRow, MoneyInput, Progress, SectionTitle,
+  Select, Sheet, useSheet,
 } from '../ui'
 import {
   useDB, debtStatus, debtEnvelopeId, addEntry,
   addDebt, updateDebt, closeDebt, reopenDebt,
 } from '../data/store'
-import type { Currency, Debt } from '../data/types'
+import { debtLinks, envelopeRoute, ruleRoute } from '../data/links'
+import type { Currency, DB, Debt } from '../data/types'
 import { money, toBase } from '../lib/money'
 import { iso, longDate, shortDate, today } from '../lib/dates'
 
@@ -52,6 +55,38 @@ function planFor(remaining: number, monthly: number, target?: string): Plan {
 }
 
 /* ─────────── дрібні шматки розмітки ─────────── */
+
+/**
+ * Чим борг гаситься. Той самий блок звʼязків, що в конверті й у фонді:
+ * правило, яке платить, і конверт, куди лягає виплата. Якщо правила немає —
+ * тут же дія, яка його заведе, з уже підставленим конвертом.
+ */
+function Payments({ debt, db, envelopeId, onGo }: {
+  debt: Debt
+  db: DB
+  envelopeId?: string
+  onGo: (to: string) => void
+}) {
+  const links = debtLinks(db, debt.id)
+  const hasRule = links.some(l => l.kind === 'plan')
+  const s = debtStatus(db, debt.id)
+
+  return (
+    <LinkGroup
+      title="Чим гаситься"
+      summary={<>лишилось <span className="text-ink">{money(s.remaining, debt.currency)}</span></>}
+      hint={hasRule
+        ? 'Платіж зʼявляється в чеклісті місяця сам — вручну вносити не треба.'
+        : 'Поки що платежі вносяться вручну. Регулярне правило робитиме це за розкладом.'}
+      actions={hasRule
+        ? undefined
+        : <AttachButton onClick={() => onGo(`/month?tab=bills&rule=new&debt=${debt.id}${envelopeId ? `&env=${envelopeId}` : ''}`)}>
+            Регулярний платіж
+          </AttachButton>}>
+      {links.map(l => <LinkRow key={l.key} link={l} onOpen={() => onGo(l.to)} />)}
+    </LinkGroup>
+  )
+}
 
 function Line({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
@@ -100,14 +135,27 @@ const draftOf = (d: Debt): Draft => ({
 
 export default function Debts() {
   const db = useDB()
+  const nav = useNavigate()
 
-  // редагування / створення
-  const [editing, setEditing] = useState<Debt | 'new' | null>(null)
+  // редагування / створення — в адресі, щоб на борг можна було послатися
+  const [debtParam, setDebtParam] = useSheet('debt')
+  const editing: Debt | 'new' | null = debtParam === 'new'
+    ? 'new'
+    : debtParam ? (db.debts.find(x => x.id === debtParam) ?? null) : null
   const [draft, setDraft] = useState<Draft>(blank)
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(p => ({ ...p, [k]: v }))
-  const openNew = () => { setDraft(blank()); setEditing('new') }
-  const openEdit = (d: Debt) => { setDraft(draftOf(d)); setEditing(d) }
-  const close = () => setEditing(null)
+  const openNew = () => setDebtParam('new')
+  const openEdit = (d: Debt) => setDebtParam(d.id)
+  const close = () => setDebtParam(null)
+
+  // чернетку сіємо на зміну адреси, а не на кожен рендер
+  useEffect(() => {
+    if (debtParam === null) return
+    if (debtParam === 'new') { setDraft(blank()); return }
+    const d = db.debts.find(x => x.id === debtParam)
+    if (d) setDraft(draftOf(d))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debtParam])
 
   // внесення платежу
   const [payId, setPayId] = useState<string | null>(null)
@@ -128,6 +176,10 @@ export default function Debts() {
     })
     closePay()
   }
+
+  // конверт, у який лягають виплати боргів — похідний, у Debt посилання немає
+  const payEnvelopeId = debtEnvelopeId(db)
+  const payEnvelope = payEnvelopeId ? db.envelopes.find(e => e.id === payEnvelopeId) : undefined
 
   const active = db.debts.filter(d => !d.closedOn)
   const closed = db.debts.filter(d => d.closedOn)
@@ -271,16 +323,24 @@ export default function Debts() {
                       </Note>
                     ) : null}
 
-                    {autoPlan && (
-                      <div className="flex items-center gap-2 text-[12.5px] text-muted">
-                        <span className="text-faint shrink-0">{Icon.clock(14)}</span>
-                        <span className="min-w-0 truncate">
-                          Гаситься автоматично: {autoPlan.name},{' '}
-                          <span className="num">{money(autoPlan.expectedMinor, autoPlan.currency)}</span>
-                          {' '}— вручну вносити не треба
-                        </span>
-                      </div>
-                    )}
+                    {/* чим борг гаситься — не текст, а перехід у те правило */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {autoPlan ? (
+                        <LinkChip icon="clock" tone="accent" onClick={() => nav(ruleRoute(autoPlan.id))}>
+                          гаситься само · {money(autoPlan.expectedMinor, autoPlan.currency)}
+                        </LinkChip>
+                      ) : (
+                        <LinkChip icon="clock"
+                          onClick={() => nav(`/month?tab=bills&rule=new&debt=${d.id}${payEnvelopeId ? `&env=${payEnvelopeId}` : ''}`)}>
+                          зробити регулярним
+                        </LinkChip>
+                      )}
+                      {payEnvelope && (
+                        <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(payEnvelope.id))}>
+                          {payEnvelope.name}
+                        </LinkChip>
+                      )}
+                    </div>
 
                     <div>
                       <Btn variant={autoPlan ? 'quiet' : 'primary'} onClick={() => openPay(d)}>
@@ -351,6 +411,10 @@ export default function Debts() {
 
       {/* ─── створення / редагування ─── */}
       <Sheet open={!!editing} onClose={close} title={editing === 'new' ? 'Новий борг' : 'Борг'}>
+        {editing && editing !== 'new' && (
+          <Payments debt={editing} db={db} onGo={nav} envelopeId={payEnvelopeId} />
+        )}
+
         <Field label="Назва" htmlFor="debt-name" hint="Як ви його називаєте між собою">
           <Input id="debt-name" value={draft.name} onChange={v => set('name', v)}
             placeholder="Кредит на авто" autoFocus />

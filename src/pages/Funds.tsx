@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, IconButton, Input, MoneyInput, Progress, SectionTitle, Segmented, Sheet, Select,
+  AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
+  Icon, IconButton, Input, LinkChip, LinkGroup, LinkRow, MoneyInput, Progress, SectionTitle,
+  Segmented, Sheet, Select, useSheet,
 } from '../ui'
 import {
   useDB, fundStatus, fundBalance, addFund, updateFund, archiveFund, spendFromFund, addEntry,
 } from '../data/store'
-import type { Currency, Fund, FundKind } from '../data/types'
+import { envelopeRoute, fundLinks } from '../data/links'
+import type { Currency, DB, Fund, FundKind, ID } from '../data/types'
 import { money } from '../lib/money'
 import { monthsUntil, shortDate } from '../lib/dates'
 
@@ -92,10 +95,28 @@ type MoveKind = 'in' | 'out'
 
 export default function Funds() {
   const db = useDB()
+  const nav = useNavigate()
 
-  // лист редагування: null = закритий, '' = новий фонд
-  const [editId, setEditId] = useState<string | null>(null)
+  // лист редагування живе в адресі: ?fund=new або ?fund=<id>
+  const [fundParam, setFundParam] = useSheet('fund')
+  const [envParam] = useSheet('env')
+  const editId = fundParam === 'new' ? '' : fundParam
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+
+  // Чернетку сіємо, коли змінилась адреса, а не при кожному рендері:
+  // інакше друге натискання клавіші затирало б перше.
+  useEffect(() => {
+    if (fundParam === null) return
+    if (fundParam === 'new') {
+      // прийшли з конверта — фонд уже знає, куди слати нагадування
+      setDraft({ ...emptyDraft(), envelopeId: envParam ?? '' })
+      return
+    }
+    const f = db.funds.find(x => x.id === fundParam)
+    if (f) setDraft(draftOf(f))
+    // db навмисно не в залежностях: чернетка не має перезаписуватись від змін бази
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fundParam, envParam])
 
   // лист внесення / витрати
   const [moveId, setMoveId] = useState<string | null>(null)
@@ -118,9 +139,9 @@ export default function Funds() {
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }))
 
-  const openNew = () => { setDraft(emptyDraft()); setEditId('') }
-  const openEdit = (f: Fund) => { setDraft(draftOf(f)); setEditId(f.id) }
-  const closeEdit = () => setEditId(null)
+  const openNew = () => setFundParam('new')
+  const openEdit = (f: Fund) => setFundParam(f.id)
+  const closeEdit = () => setFundParam(null, { env: null })
 
   const editing = editId ? db.funds.find(f => f.id === editId) : undefined
   const balance = editing ? fundBalance(db, editing.id) : 0
@@ -227,9 +248,11 @@ export default function Funds() {
               return (
                 <FundCard key={f.id} fund={f} index={i} last={i === active.length - 1}
                           status={status}
+                          envelope={db.envelopes.find(e => e.id === f.envelopeId)}
                           onEdit={() => openEdit(f)} onMove={dir => move(i, dir)}
                           onPayIn={() => openMove(f, 'in', status.required)}
-                          onSpend={() => openMove(f, 'out', 0)} />
+                          onSpend={() => openMove(f, 'out', 0)}
+                          onGo={nav} />
               )
             })}
           </div>
@@ -303,33 +326,9 @@ export default function Funds() {
         </Field>
 
         {/* Нагадування: фонд перестає бути місцем, куди треба не забути зайти,
-            і стає рядком у чеклісті місяця — як рахунок. */}
-        <Field label="Нагадувати щомісяця"
-          hint={draft.envelopeId
-            ? 'Внесок зʼявиться в чеклісті місяця й у задачах. Суму перерахуємо щоразу заново.'
-            : 'Без конверта внесок доведеться вносити руками, коли згадаєте.'}>
-          <Select
-            value={draft.envelopeId}
-            onChange={v => setDraft(d => ({ ...d, envelopeId: v }))}
-            placeholder="Не нагадувати"
-            options={db.envelopes
-              .filter(e => !e.archived && e.kind !== 'income')
-              .sort((a, b) => a.sortOrder - b.sortOrder)
-              .map(e => ({ value: e.id, label: e.name }))}
-          />
-        </Field>
-
-        {draft.envelopeId && (
-          <Field label="Якого числа" hint="Коли платіж зʼявиться в чеклісті.">
-            <Select
-              value={String(draft.contributionDay)}
-              onChange={v => setDraft(d => ({ ...d, contributionDay: Number(v) }))}
-              options={Array.from({ length: 28 }, (_, i) => ({
-                value: String(i + 1), label: `${i + 1} числа`,
-              }))}
-            />
-          </Field>
-        )}
+            і стає рядком у чеклісті місяця — як рахунок. Звʼязок видно і звідси,
+            і з конверта, та з обох боків він веде на інший бік. */}
+        <Reminder db={db} draft={draft} setDraft={setDraft} fund={editing} onGo={nav} />
 
         <Field label="Валюта" hint="Фонд збирається і витрачається в цій валюті.">
           <Segmented full label="Валюта" value={draft.currency}
@@ -400,15 +399,93 @@ export default function Funds() {
 
 /* ─────────────── картка фонду ─────────────── */
 
-function FundCard({ fund, status, index, last, onEdit, onMove, onPayIn, onSpend }: {
+/**
+ * Куди фонд надсилає нагадування.
+ *
+ * Раніше це були два поля форми серед інших — конверт і число. Поле не каже,
+ * що звʼязок узагалі існує: щоб побачити, що фонд щось кладе в «Нерегулярне»,
+ * треба було відкрити фонд і здогадатись прочитати селект. Тепер це блок
+ * звʼязків, однаковий у конверті й у фонді, і з нього можна піти в конверт.
+ */
+function Reminder({ db, draft, setDraft, fund, onGo }: {
+  db: DB
+  draft: Draft
+  setDraft: (fn: (d: Draft) => Draft) => void
+  fund?: Fund
+  onGo: (to: string) => void
+}) {
+  const envelopes = db.envelopes
+    .filter(e => !e.archived && e.kind !== 'income')
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+  const linked = envelopes.find(e => e.id === draft.envelopeId)
+  // Не lazy-стан: чернетку сіє ефект уже після першого рендера, тож
+  // useState(!linked) щоразу відкривав би привʼязаний фонд у режимі правки.
+  const [forceEdit, setForceEdit] = useState(false)
+  const editing = forceEdit || !linked
+  // куди ще дивиться цей фонд: правила, які з нього платять
+  const spends = fund ? fundLinks(db, fund.id).filter(l => l.kind === 'plan') : []
+
+  const dayOptions = Array.from({ length: 28 }, (_, i) => ({
+    value: String(i + 1), label: `${i + 1} числа`,
+  }))
+
+  return (
+    <LinkGroup
+      title="Нагадування"
+      summary={linked && !editing ? `${draft.contributionDay} числа` : undefined}
+      hint={linked
+        ? 'Внесок стає рядком у чеклісті місяця й задачею. Суму перерахуємо щоразу заново.'
+        : 'Без конверта внесок доведеться вносити руками, коли згадаєте.'}
+      actions={linked && !editing
+        ? <AttachButton icon="pencil" onClick={() => setForceEdit(true)}>Змінити нагадування</AttachButton>
+        : undefined}>
+
+      {linked && !editing && (
+        <LinkRow
+          link={{
+            key: `env:${linked.id}`, kind: 'envelope', id: linked.id, icon: 'wallet',
+            title: linked.name, note: `внесок ${draft.contributionDay} числа щомісяця`,
+            to: envelopeRoute(linked.id),
+          }}
+          onOpen={() => onGo(envelopeRoute(linked.id))} />
+      )}
+
+      {editing && (
+        <>
+          <Field label="У який конверт">
+            <Select
+              value={draft.envelopeId}
+              onChange={v => setDraft(d => ({ ...d, envelopeId: v }))}
+              placeholder="Не нагадувати"
+              options={envelopes.map(e => ({ value: e.id, label: e.name }))} />
+          </Field>
+          {draft.envelopeId && (
+            <Field label="Якого числа">
+              <Select
+                value={String(draft.contributionDay)}
+                onChange={v => setDraft(d => ({ ...d, contributionDay: Number(v) }))}
+                options={dayOptions} />
+            </Field>
+          )}
+        </>
+      )}
+
+      {spends.map(l => <LinkRow key={l.key} link={l} onOpen={() => onGo(l.to)} />)}
+    </LinkGroup>
+  )
+}
+
+function FundCard({ fund, status, envelope, index, last, onEdit, onMove, onPayIn, onSpend, onGo }: {
   fund: Fund
   status: ReturnType<typeof fundStatus>
+  envelope?: { id: ID; name: string }
   index: number
   last: boolean
   onEdit: () => void
   onMove: (dir: -1 | 1) => void
   onPayIn: () => void
   onSpend: () => void
+  onGo: (to: string) => void
 }) {
   const { balance, target, monthsLeft, required, progress, onTrack } = status
   const behind = !!target && !onTrack
@@ -455,6 +532,15 @@ function FundCard({ fund, status, index, last, onEdit, onMove, onPayIn, onSpend 
         {fund.dueDate && <span className="num text-faint">до {shortDate(fund.dueDate)}</span>}
         {target && <span className="text-faint">лишилось {monthsWord(monthsLeft)}</span>}
         {fund.monthlyFixedMinor != null && <span className="text-faint">без кінцевої дати</span>}
+      </div>
+
+      {/* куди фонд просить внести — видно з картки, не лише зсередини форми */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {envelope
+          ? <LinkChip icon="wallet" onClick={() => onGo(envelopeRoute(envelope.id))}>
+              нагадує {fund.contributionDay ?? 1} числа · {envelope.name}
+            </LinkChip>
+          : <LinkChip onClick={onEdit}>без нагадування</LinkChip>}
       </div>
 
       <Formula fund={fund} balance={balance} target={target} monthsLeft={monthsLeft} required={required} />

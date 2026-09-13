@@ -902,11 +902,38 @@ export function addFund(input: Omit<Fund, 'id' | 'priority'> & { priority?: numb
 }
 
 export function updateFund(id: ID, patch: Partial<Fund>) {
-  mutate(d => { const f = d.funds.find(x => x.id === id); if (f) Object.assign(f, patch) })
+  mutate(d => {
+    const f = d.funds.find(x => x.id === id)
+    if (!f) return
+    // Нагадування переїхало в інший конверт або вимкнулось: старі згенеровані
+    // внески треба прибрати, інакше вони висять у чужому конверті назавжди.
+    // Оплачене не чіпаємо — це вже факт.
+    const moved = ('envelopeId' in patch && patch.envelopeId !== f.envelopeId)
+      || ('contributionDay' in patch && patch.contributionDay !== f.contributionDay)
+    Object.assign(f, patch)
+    if (moved) dropFutureFundOccurrences(d, id)
+  })
 }
 
 export function archiveFund(id: ID, archived = true) {
-  mutate(d => { const f = d.funds.find(x => x.id === id); if (f) f.archived = archived })
+  mutate(d => {
+    const f = d.funds.find(x => x.id === id)
+    if (!f) return
+    f.archived = archived
+    if (archived) dropFutureFundOccurrences(d, id)
+  })
+}
+
+/**
+ * Прибираємо непідтверджені внески фонду — і майбутні, і прострочені.
+ *
+ * На відміну від рахунка, прострочений внесок у фонд не є боргом перед кимось:
+ * якщо нагадування вимкнули, тримати його в чеклісті немає сенсу. Оплачене
+ * й пропущене лишається — це вже історія.
+ */
+function dropFutureFundOccurrences(d: DB, fundId: ID) {
+  d.occurrences = d.occurrences.filter(o =>
+    o.fundId !== fundId || o.status === 'paid' || o.status === 'skipped')
 }
 
 /** Витрата з фонду напряму (не через прив'язаний регулярний платіж). */
