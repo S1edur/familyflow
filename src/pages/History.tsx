@@ -1,46 +1,77 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, ConfirmButton, DateInput, Empty, Field, FormActions,
-  Icon, Input, MoneyInput, Segmented, Select, Sheet, Stat, Tabs, Rows,
+  Icon, Input, LinkChip, MoneyInput, Segmented, Select, Sheet, Stat, Tabs, Rows,
 } from '../ui'
-import { useDB, updateEntry, removeEntry } from '../data/store'
+import { useDB, updateEntry, removeEntry, freeProject } from '../data/store'
+import { payableProjects } from '../components/RuleForm'
+import { projectRoute } from '../data/links'
 import { money, SYMBOL } from '../lib/money'
 import { addMonths, longDate, monthKey, monthTitle, thisMonth } from '../lib/dates'
-import type { Currency, DB, Entry, EntryKind } from '../data/types'
+import type { Currency, DB, Entry, EntryKind, ID } from '../data/types'
 
 type KindFilter = 'all' | EntryKind
 
 const KIND_LABEL: Record<EntryKind, string> = {
+  income: 'Надходження',
   expense: 'Витрата',
-  income: 'Дохід',
-  fund_in: 'У фонд',
-  fund_out: 'З фонду',
-  debt_payment: 'Борг',
+  transfer: 'Переказ',
+  repay: 'Погашення',
 }
 
-/** Дохід і внесок у фонд — гроші, що прийшли або відкладені: акцент. Решта — нейтрально. */
+/** Надходження — гроші, що прийшли: акцент. Решта — нейтрально. */
 const KIND_TONE: Record<EntryKind, 'neutral' | 'accent'> = {
-  expense: 'neutral', income: 'accent', fund_in: 'accent', fund_out: 'neutral', debt_payment: 'neutral',
+  income: 'accent', expense: 'neutral', transfer: 'neutral', repay: 'neutral',
 }
 
-const PLUS: EntryKind[] = ['income', 'fund_in']
+/** Справжні витрати родини. Переказ — перекладання між своїми кишенями, не витрата. */
+const isSpend = (k: EntryKind) => k === 'expense' || k === 'repay'
 
-/** Куди належить запис: конверт, фонд або борг. */
+const FREE_KEY = '__free__'
+const FREE_NAME = 'Вільні гроші'
+
+/** Порожній id і системний проєкт — одна й та сама кишеня «Вільні гроші». */
+function projectKey(db: DB, id: ID | undefined): string {
+  return !id || id === freeProject(db)?.id ? FREE_KEY : id
+}
+
+function projectName(db: DB, id: ID | undefined): string | undefined {
+  if (projectKey(db, id) === FREE_KEY) return FREE_NAME
+  return db.projects.find(p => p.id === id)?.name
+}
+
+/** Куди належить запис; для переказу — «звідки → куди». */
 function targetName(db: DB, e: Entry): string | undefined {
-  if (e.envelopeId) return db.envelopes.find(x => x.id === e.envelopeId)?.name
-  if (e.fundId) return db.funds.find(x => x.id === e.fundId)?.name
-  if (e.debtId) return db.debts.find(x => x.id === e.debtId)?.name
-  return undefined
+  if (e.kind === 'transfer') {
+    return `${projectName(db, e.fromProjectId) ?? '—'} → ${projectName(db, e.projectId) ?? '—'}`
+  }
+  return projectName(db, e.projectId)
+}
+
+/** Знак суми: + надходження, − витрата й погашення, переказ без знака. */
+function amountText(e: Entry): string {
+  const m = money(e.amountMinor, e.currency)
+  if (e.kind === 'income') return money(e.amountMinor, e.currency, { sign: true })
+  if (e.kind === 'transfer') return `⇄ ${m}`
+  return `−${m}`
 }
 
 export default function History() {
   const db = useDB()
   const [month, setMonth] = useState(thisMonth())
   const [kind, setKind] = useState<KindFilter>('all')
-  const [envelopeId, setEnvelopeId] = useState('')
+  const [projectFilter, setProjectFilter] = useState('')
   const [editId, setEditId] = useState<string | null>(null)
 
-  const envelopes = db.envelopes.filter(e => !e.archived).sort((a, b) => a.sortOrder - b.sortOrder)
+  // «Вільні гроші» першими, далі активні й завершені; архівні у фільтрі лише шумлять
+  const filterOptions = [
+    { value: FREE_KEY, label: FREE_NAME },
+    ...db.projects
+      .filter(p => !p.isFree && p.status !== 'archived')
+      .sort((a, b) => Number(a.status !== 'active') - Number(b.status !== 'active') || a.sortOrder - b.sortOrder)
+      .map(p => ({ value: p.id, label: p.status === 'active' ? p.name : `${p.name} · завершений` })),
+  ]
 
   // найновіші вгорі; у межах дня — новіші записи першими
   const inMonth = useMemo(() => {
@@ -53,10 +84,11 @@ export default function History() {
 
   const shown = inMonth.filter(e =>
     (kind === 'all' || e.kind === kind) &&
-    (!envelopeId || e.envelopeId === envelopeId))
+    (!projectFilter || projectKey(db, e.projectId) === projectFilter
+      || (e.kind === 'transfer' && projectKey(db, e.fromProjectId) === projectFilter)))
 
-  const spent = shown.filter(e => !PLUS.includes(e.kind)).reduce((s, e) => s + e.amountBaseMinor, 0)
-  const got = shown.filter(e => PLUS.includes(e.kind)).reduce((s, e) => s + e.amountBaseMinor, 0)
+  const spent = shown.filter(e => isSpend(e.kind)).reduce((s, e) => s + e.amountBaseMinor, 0)
+  const got = shown.filter(e => e.kind === 'income').reduce((s, e) => s + e.amountBaseMinor, 0)
 
   // згрупувати за днями, порядок уже правильний
   const days: { date: string; items: Entry[] }[] = []
@@ -67,7 +99,7 @@ export default function History() {
   }
 
   const counts = (k: EntryKind) => inMonth.filter(e => e.kind === k).length
-  const filtered = kind !== 'all' || !!envelopeId
+  const filtered = kind !== 'all' || !!projectFilter
   const lastMonthWithEntries = db.entries.length
     ? db.entries.map(e => monthKey(e.occurredOn)).sort().at(-1)!
     : undefined
@@ -95,7 +127,7 @@ export default function History() {
           </div>
           <dl className="grid grid-cols-3 gap-x-4 gap-y-2 mt-2 text-[13px]">
             <Stat label="Витрачено" value={money(spent)} />
-            <Stat label="Надійшло і відкладено" value={money(got)} />
+            <Stat label="Надійшло" value={money(got)} />
             <Stat label="Записів" value={shown.length} tone="muted" />
           </dl>
         </div>
@@ -105,18 +137,17 @@ export default function History() {
         <Tabs value={kind} onChange={setKind} items={[
           { value: 'all', label: 'Усі', badge: inMonth.length },
           { value: 'expense', label: 'Витрати', badge: counts('expense') },
-          { value: 'income', label: 'Доходи', badge: counts('income') },
-          { value: 'fund_in', label: 'У фонди', badge: counts('fund_in') },
-          { value: 'fund_out', label: 'З фондів', badge: counts('fund_out') },
-          { value: 'debt_payment', label: 'Борги', badge: counts('debt_payment') },
+          { value: 'income', label: 'Надходження', badge: counts('income') },
+          { value: 'transfer', label: 'Перекази', badge: counts('transfer') },
+          { value: 'repay', label: 'Погашення', badge: counts('repay') },
         ]} />
         <div className="mt-2 flex items-center gap-2">
-          <div className="flex-1">
-            <Select value={envelopeId} onChange={setEnvelopeId} placeholder="Усі конверти"
-              options={envelopes.map(e => ({ value: e.id, label: e.name }))} />
+          <div className="flex-1 min-w-0">
+            <Select value={projectFilter} onChange={setProjectFilter} placeholder="Усі проєкти"
+              options={filterOptions} />
           </div>
           {filtered && (
-            <Btn variant="quiet" onClick={() => { setKind('all'); setEnvelopeId('') }}>Скинути</Btn>
+            <Btn variant="quiet" onClick={() => { setKind('all'); setProjectFilter('') }}>Скинути</Btn>
           )}
         </div>
       </div>
@@ -125,12 +156,12 @@ export default function History() {
         <Empty>
           <p className="max-w-[420px] mx-auto">
             {filtered
-              ? 'За цим фільтром записів немає. Тут показуються витрати, доходи, внески у фонди й платежі по боргах.'
-              : 'Тут з’являється кожен запис — витрати, доходи, внески у фонди й платежі по боргах. Будь-який можна виправити або видалити.'}
+              ? 'За цим фільтром записів немає. Тут показуються витрати, надходження, перекази між проєктами й погашення боргів.'
+              : 'Тут з’являється кожен запис — витрати, надходження, перекази між проєктами й погашення боргів. Будь-який можна виправити або видалити.'}
           </p>
           <div className="mt-3">
             {filtered
-              ? <Btn onClick={() => { setKind('all'); setEnvelopeId('') }}>Показати всі записи</Btn>
+              ? <Btn onClick={() => { setKind('all'); setProjectFilter('') }}>Показати всі записи</Btn>
               : lastMonthWithEntries && lastMonthWithEntries !== month
                 ? <Btn onClick={() => setMonth(lastMonthWithEntries)}>
                     Перейти до {monthTitle(lastMonthWithEntries).toLowerCase()}
@@ -166,7 +197,7 @@ function EntryRow({ db, entry, onOpen }: { db: DB; entry: Entry; onOpen: () => v
   const who = db.members.find(m => m.id === entry.createdBy)
   const target = targetName(db, entry)
   const foreign = entry.currency !== 'UAH'
-  const plus = PLUS.includes(entry.kind)
+  const plus = entry.kind === 'income'
 
   return (
     <li>
@@ -177,7 +208,7 @@ function EntryRow({ db, entry, onOpen }: { db: DB; entry: Entry; onOpen: () => v
             {entry.note || target || KIND_LABEL[entry.kind]}
           </span>
           <span className={`text-[14px] num shrink-0 ${plus ? 'text-accentInk' : ''}`}>
-            {money(entry.amountMinor, entry.currency, plus ? { sign: true } : {})}
+            {amountText(entry)}
           </span>
         </div>
         <div className="flex items-center gap-1.5 mt-1 text-[12px] text-faint">
@@ -199,29 +230,40 @@ function EntryRow({ db, entry, onOpen }: { db: DB; entry: Entry; onOpen: () => v
 }
 
 function EditEntry({ db, entry, onClose }: { db: DB; entry: Entry; onClose: () => void }) {
+  const navigate = useNavigate()
   const [amountMinor, setAmountMinor] = useState(entry.amountMinor)
   const [currency, setCurrency] = useState<Currency>(entry.currency)
-  const [envelopeId, setEnvelopeId] = useState(entry.envelopeId ?? '')
+  const initialProject = projectKey(db, entry.projectId) === FREE_KEY ? '' : entry.projectId ?? ''
+  const [projectId, setProjectId] = useState(initialProject)
   const [note, setNote] = useState(entry.note ?? '')
   const [occurredOn, setOccurredOn] = useState<string | undefined>(entry.occurredOn)
 
   const target = targetName(db, entry)
   const occurrence = entry.occurrenceId ? db.occurrences.find(o => o.id === entry.occurrenceId) : undefined
-  // конверт редагуємо лише там, де він є: запис фонду чи боргу належить фонду або боргу
-  // архівний конверт лишається у списку, поки на нього дивиться цей запис,
+  // Проєкт міняємо лише у витрати й погашення: надходження завжди у вільні,
+  // а переказ — окрема пара «звідки → куди», яку простіше видалити й зробити заново.
+  const canMove = isSpend(entry.kind)
+  // завершений проєкт лишається у списку, поки на нього дивиться цей запис,
   // інакше нативний select мовчки перекинув би запис на перший варіант
-  const envelopes = db.envelopes
-    .filter(e => (!e.archived || e.id === entry.envelopeId)
-      && (entry.kind === 'income' ? e.kind === 'income' : e.kind !== 'income'))
-    .sort((a, b) => a.sortOrder - b.sortOrder)
+  const current = db.projects.find(p => p.id === initialProject)
+  const payable = payableProjects(db).filter(p => p.direction !== 'none')
+  const options = [...(current && !payable.includes(current) ? [current] : []), ...payable]
+    .map(p => ({ value: p.id, label: p.name }))
   const changesRate = amountMinor !== entry.amountMinor || currency !== entry.currency
+  // посилання на проєкт запису — звʼязок має бути клікабельним з обох боків
+  const linked = entry.kind === 'transfer'
+    ? [entry.fromProjectId, entry.projectId]
+    : [entry.projectId]
+  const linkedProjects = linked
+    .map(id => (id ? db.projects.find(p => p.id === id && !p.isFree) : undefined))
+    .filter((p): p is NonNullable<typeof p> => !!p)
 
   const save = () => {
     if (!amountMinor) return
     updateEntry(entry.id, {
       amountMinor,
       currency,
-      ...(entry.envelopeId && envelopeId ? { envelopeId } : {}),
+      ...(canMove && projectId !== initialProject ? { projectId: projectId || undefined } : {}),
       note: note.trim(),
       ...(occurredOn ? { occurredOn } : {}),
     })
@@ -230,10 +272,16 @@ function EditEntry({ db, entry, onClose }: { db: DB; entry: Entry; onClose: () =
 
   return (
     <div>
-      <div className="flex items-center gap-1.5 mb-3">
+      <div className="flex items-center gap-1.5 mb-3 flex-wrap">
         <Badge tone={KIND_TONE[entry.kind]}>{KIND_LABEL[entry.kind]}</Badge>
-        {target && !entry.envelopeId && <span className="text-[12.5px] text-muted">{target}</span>}
+        {target && !canMove && <span className="text-[12.5px] text-muted">{target}</span>}
         {entry.tripId && <Badge>покупки</Badge>}
+        {linkedProjects.map(p => (
+          <LinkChip key={p.id} icon={p.direction === 'save' ? 'piggy' : p.direction === 'repay' ? 'list' : 'wallet'}
+            onClick={() => { onClose(); navigate(projectRoute(p.id)) }}>
+            {p.name}
+          </LinkChip>
+        ))}
       </div>
 
       <Field label="Сума" htmlFor="e-amount">
@@ -256,10 +304,11 @@ function EditEntry({ db, entry, onClose }: { db: DB; entry: Entry; onClose: () =
         </div>
       )}
 
-      {entry.envelopeId && (
-        <Field label="Конверт" htmlFor="e-env">
-          <Select id="e-env" value={envelopeId} onChange={setEnvelopeId}
-            options={envelopes.map(e => ({ value: e.id, label: e.name }))} />
+      {canMove && (
+        <Field label="Проєкт" htmlFor="e-project"
+          hint={projectId ? undefined : 'Без проєкту витрата лягає у «Вільні гроші».'}>
+          <Select id="e-project" value={projectId} onChange={setProjectId} placeholder="Без проєкту"
+            options={options} />
         </Field>
       )}
 
@@ -274,7 +323,7 @@ function EditEntry({ db, entry, onClose }: { db: DB; entry: Entry; onClose: () =
       {occurrence && (
         <div className="rounded-lg border border-line bg-warnSoft p-3 text-[12.5px] text-warn">
           Цей запис підтверджує платіж «{occurrence.name}».
-          Видалення поверне платіж у стан «до оплати» і прибере пов’язане списання з фонду. Це навмисно.
+          Видалення поверне платіж у стан «до оплати». Це навмисно.
         </div>
       )}
 

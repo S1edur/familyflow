@@ -20,15 +20,19 @@ export interface Synced {
 }
 export type Currency = 'UAH' | 'USD' | 'EUR'
 
-export type EnvelopeKind =
-  | 'income' | 'fixed' | 'variable' | 'sinking' | 'savings' | 'debt' | 'personal'
-
 export type TaskStatus = 'backlog' | 'todo' | 'doing' | 'done' | 'dropped'
 export type Priority = 0 | 1 | 2 | 3 | 4 // 0 = не проставлений, сортується ОСТАННІМ
 export type OccurrenceStatus = 'projected' | 'due' | 'paid' | 'skipped'
-export type FundKind = 'sinking' | 'goal' | 'emergency' | 'buffer'
-export type EntryKind =
-  | 'expense' | 'income' | 'fund_in' | 'fund_out' | 'debt_payment'
+
+/**
+ * Рух грошей. Лише expense і repay — справжні витрати родини;
+ * transfer — перекладання між власними кишенями, не витрата.
+ */
+export type EntryKind = 'income' | 'expense' | 'transfer' | 'repay'
+
+/** Що проєкт робить із грошима. `none` — проєкт лише із задачами. */
+export type ProjectDirection = 'spend' | 'save' | 'repay' | 'none'
+export type ProjectStatus = 'active' | 'done' | 'archived'
 
 export interface Member {
   id: ID
@@ -37,19 +41,34 @@ export interface Member {
   initials: string
 }
 
-export interface Envelope extends Synced {
+/**
+ * Проєкт — єдина сутність замість конверта, фонду й боргу.
+ * Різниця між ними — налаштування, а не тип. Баланс, прогрес і «треба
+ * відкласти» рахуються із записів на читанні (інваріант 4).
+ */
+export interface Project extends Synced {
   id: ID
   name: string
-  kind: EnvelopeKind
-  ownerId?: ID          // не порожнє => особистий конверт
+  description?: string
+  direction: ProjectDirection
+  status: ProjectStatus
+  /** Системний «Вільні гроші»: рівно один на дім, не видаляється. */
+  isFree?: boolean
+  currency: Currency
+  startsOn?: string
+  /** Порожнє — безстроковий. */
+  endsOn?: string
+  /** save: зібрати · spend: бюджет на весь час · repay: тіло боргу */
+  targetMinor?: number
+  /** spend: орієнтир на місяць · save: фіксований внесок · repay: платіж на місяць */
+  monthlyMinor?: number
+  bufferPct?: number
+  counterparty?: string
+  /** spend/repay: з якого накопичення платимо. Порожнє — з вільних. */
+  sourceProjectId?: ID
+  ownerId?: ID
   sortOrder: number
-  archived?: boolean
-}
-
-export interface PlanLine extends Synced {
-  envelopeId: ID
-  month: string         // '2026-09'
-  plannedMinor: number
+  pinned?: boolean
 }
 
 export type Freq = 'monthly' | 'weekly' | 'yearly' | 'daily'
@@ -57,7 +76,9 @@ export type Freq = 'monthly' | 'weekly' | 'yearly' | 'daily'
 export interface RecurringPlan extends Synced {
   id: ID
   name: string
-  envelopeId: ID
+  projectId: ID
+  /** in — надходження (зарплата), out — платіж. Ефект оплати визначає проєкт. */
+  flow: 'in' | 'out'
   expectedMinor: number
   currency: Currency
   amountMode: 'fixed' | 'variable'
@@ -67,21 +88,18 @@ export interface RecurringPlan extends Synced {
   byMonth?: number
   anchorDate: string    // ISO date
   assigneeId?: ID
-  fundId?: ID           // фонд, який фінансує цей платіж
-  debtId?: ID           // борг, який цей платіж гасить
   active: boolean
 }
 
 export interface Occurrence extends Synced {
   id: ID
   planId?: ID
-  envelopeId: ID
+  projectId: ID
   name: string
   dueDate: string       // ISO date
   expectedMinor: number
   currency: Currency
   status: OccurrenceStatus
-  fundId?: ID           // фонд, який цей платіж ПОПОВНЮЄ (протилежне до RecurringPlan.fundId)
   assigneeId?: ID
   paidOn?: string
   actualMinor?: number
@@ -97,47 +115,21 @@ export interface Entry extends Synced {
   currency: Currency
   rateToBase: number     // заморожений на момент запису
   amountBaseMinor: number
-  envelopeId?: ID
-  fundId?: ID
-  debtId?: ID
+  /** income/transfer: куди · expense/repay: на який проєкт. Порожнє — «Вільні гроші». */
+  projectId?: ID
+  /** transfer: звідки. Порожнє — «Вільні гроші». */
+  fromProjectId?: ID
   occurrenceId?: ID
   tripId?: ID
   note?: string
   createdBy: ID
 }
 
-export interface Fund extends Synced {
-  id: ID
-  name: string
-  kind: FundKind
-  currency: Currency
-  targetMinor?: number
-  dueDate?: string
-  monthlyFixedMinor?: number
-  bufferPct?: number
-  linkedPlanId?: ID
-  envelopeId?: ID       // конверт, до якого належить внесок; порожній => не нагадуємо
-  contributionDay?: number  // число місяця для нагадування, за замовчуванням 1
-  priority: number
-  archived?: boolean
-}
-
-export interface Debt extends Synced {
-  id: ID
-  name: string
-  counterparty?: string
-  principalMinor: number
-  currency: Currency
-  monthlyPaymentMinor?: number
-  targetDate?: string
-  openedOn: string
-  closedOn?: string
-}
-
 export interface TaskTemplate extends Synced {
   id: ID
   title: string
   area?: string
+  projectId?: ID
   effort: 1 | 2 | 3
   scheduleKind: 'fixed' | 'after_completion'
   freq?: Freq
@@ -160,6 +152,7 @@ export interface Task extends Synced {
   priority: Priority
   assigneeId?: ID       // undefined = вільна, хто візьме
   area?: string
+  projectId?: ID        // undefined = побут, без проєкту
   dueDate?: string
   deferUntil?: string
   effort: 1 | 2 | 3
@@ -189,19 +182,17 @@ export interface Trip extends Synced {
   completedAt: string
   totalMinor: number
   currency: Currency
+  projectId?: ID
 }
 
 export interface Rates { USD: number; EUR: number }
 
 export interface DB {
   members: Member[]
-  envelopes: Envelope[]
-  planLines: PlanLine[]
+  projects: Project[]
   recurringPlans: RecurringPlan[]
   occurrences: Occurrence[]
   entries: Entry[]
-  funds: Fund[]
-  debts: Debt[]
   taskTemplates: TaskTemplate[]
   tasks: Task[]
   shoppingItems: ShoppingItem[]

@@ -1,10 +1,10 @@
 /**
  * Перші кроки нового дому.
  *
- * Новий дім отримує лише стартові конверти — решта екранів порожня. Порожній
+ * Новий дім отримує лише «Вільні гроші» й стартові проєкти — решта екранів порожня. Порожній
  * стан на кожному екрані пояснює свій екран, але не каже, З ЧОГО почати.
  * Тут — короткий шлях, після якого застосунок починає працювати сам:
- * чекліст місяця заповнюється правилами, «вільно» рахується з доходу,
+ * вільні гроші мають початкову суму, місяць рахується наперед із доходу й платежів,
  * задачі чергуються.
  *
  * Прогрес не зберігається (інваріант 4): крок виконаний, коли в даних уже
@@ -13,7 +13,7 @@
  */
 import type { DB } from './types'
 import { newRuleRoute } from './links'
-import { thisMonth } from '../lib/dates'
+import { freeProject } from './store'
 
 export interface SetupStep {
   key: string
@@ -25,10 +25,8 @@ export interface SetupStep {
 }
 
 export function setupSteps(d: DB): SetupStep[] {
-  const income = d.envelopes.find(e => e.kind === 'income' && !e.archived)
-  const incomeIds = new Set(d.envelopes.filter(e => e.kind === 'income').map(e => e.id))
-  const month = thisMonth()
-
+  const free = freeProject(d)
+  const hasStart = d.entries.some(e => e.kind === 'income')
   return [
     {
       key: 'partner',
@@ -39,28 +37,29 @@ export function setupSteps(d: DB): SetupStep[] {
       done: d.members.length >= 2,
     },
     {
+      key: 'start',
+      title: 'Скільки грошей зараз',
+      hint: 'Одна сума — те, що є на картках і готівкою. З неї починаються «Вільні гроші».',
+      action: 'Вписати',
+      to: free ? `/projects/${free.id}?start=1` : '/projects',
+      done: hasStart,
+    },
+    {
       key: 'income',
       title: 'Додайте дохід',
-      hint: 'Зарплата як регулярне правило — з неї рахується, скільки вільно.',
+      hint: 'Зарплата як регулярне надходження — щоб місяць рахувався наперед.',
       action: 'Додати',
-      to: newRuleRoute({ envelopeId: income?.id }),
-      done: d.recurringPlans.some(p => incomeIds.has(p.envelopeId)),
+      to: free ? newRuleRoute(free.id) + '&flow=in' : '/projects',
+      done: d.recurringPlans.some(p => p.flow === 'in'),
     },
     {
-      key: 'bills',
-      title: 'Регулярні платежі',
-      hint: 'Оренда, комуналка, підписки — чекліст місяця заповниться сам.',
-      action: 'Додати',
-      to: newRuleRoute(),
-      done: d.recurringPlans.some(p => !incomeIds.has(p.envelopeId)),
-    },
-    {
-      key: 'plan',
-      title: 'Розпишіть місяць',
-      hint: 'Скільки на продукти, транспорт, розваги. Факт підтягнеться з витрат.',
+      key: 'projects',
+      title: 'Розкладіть витрати по проєктах',
+      hint: 'Житло, продукти, транспорт — орієнтир на місяць і регулярні платежі.',
       action: 'Відкрити',
-      to: '/envelopes',
-      done: d.planLines.some(l => l.month === month && l.plannedMinor > 0),
+      to: '/projects',
+      done: d.projects.some(p => !p.isFree && p.direction === 'spend' && p.status === 'active'
+        && (!!p.monthlyMinor || d.recurringPlans.some(r => r.projectId === p.id && r.flow === 'out'))),
     },
     {
       key: 'chores',
@@ -73,9 +72,7 @@ export function setupSteps(d: DB): SetupStep[] {
   ]
 }
 
-/** Дім ще налаштовується: без доходу «вільно» не має сенсу показувати числом. */
+/** Без доходу й стартового залишку «вільні» не мають сенсу як число. */
 export function hasIncome(d: DB): boolean {
-  const incomeIds = new Set(d.envelopes.filter(e => e.kind === 'income').map(e => e.id))
-  return d.recurringPlans.some(p => incomeIds.has(p.envelopeId))
-    || d.entries.some(e => e.kind === 'income')
+  return d.entries.some(e => e.kind === 'income') || d.recurringPlans.some(p => p.flow === 'in')
 }

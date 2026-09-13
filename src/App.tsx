@@ -9,11 +9,10 @@ import { useDB, setMe } from './data/store'
 import { useAuth, useHousehold } from './data/auth'
 import Today from './pages/Today'
 import Tasks from './pages/Tasks'
-import Envelopes from './pages/Envelopes'
-import Bills from './pages/Bills'
+import Projects from './pages/Projects'
+import Project from './pages/Project'
+import Month from './pages/Month'
 import Shopping from './pages/Shopping'
-import Funds from './pages/Funds'
-import Debts from './pages/Debts'
 import History from './pages/History'
 import Settings from './pages/Settings'
 import SettingsFamily from './pages/SettingsFamily'
@@ -21,30 +20,27 @@ import SettingsFamily from './pages/SettingsFamily'
 const NAV = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
   { to: '/tasks',    label: 'Задачі',   icon: Icon.check },
-  { to: '/envelopes', label: 'Конверти', icon: Icon.wallet },
-  { to: '/bills',     label: 'Платежі',  icon: Icon.calendar },
+  { to: '/projects', label: 'Проєкти',  icon: Icon.piggy },
+  { to: '/month',    label: 'Місяць',   icon: Icon.calendar },
   { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
-  { to: '/funds',    label: 'Фонди',    icon: Icon.piggy },
 ]
 
 /**
  * Мобільний таб-бар: рівно пʼять пунктів, «Витрата» рівно в центрі.
  * Сім пунктів на 375px дають 53px на кожен — підписи не вміщуються,
- * тому Конверти, Платежі, Фонди, Борги й Історія живуть у «Ще» та в боковій
- * панелі на десктопі.
+ * тому Місяць, Покупки й Історія живуть у «Ще» та в боковій панелі на десктопі.
  */
 const TABS = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
   { to: '/tasks',    label: 'Задачі',   icon: Icon.check },
-  { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
+  { to: '/projects', label: 'Проєкти',  icon: Icon.piggy },
   { to: '/settings', label: 'Ще',       icon: Icon.gear },
 ]
 
 /** Екрани, що відкриваються через «Ще»: на них підсвічуємо «Ще», інакше таб-бар порожній. */
-const MORE_PATHS = ['/envelopes', '/bills', '/funds', '/debts', '/history']
+const MORE_PATHS = ['/month', '/shopping', '/history']
 
 const SECONDARY = [
-  { to: '/debts',    label: 'Борги',        icon: Icon.list },
   { to: '/history',  label: 'Історія',      icon: Icon.clock },
   { to: '/settings', label: 'Налаштування', icon: Icon.gear },
 ]
@@ -69,14 +65,14 @@ function Tab({ n, path, cart }: {
   )
 }
 
-/** Стара адреса `/month`: `?tab=bills` вела в чекліст, решта — у конверти. */
-function MonthRedirect() {
+/**
+ * Старі адреси моделі «конверти, фонди, борги». Вибраний місяць (?m=)
+ * переносимо, решту параметрів — ні: вони вказували на сутності, яких більше немає.
+ */
+function Legacy({ to }: { to: string }) {
   const { search } = useLocation()
-  const params = new URLSearchParams(search)
-  const bills = params.get('tab') === 'bills'
-  params.delete('tab')
-  const q = params.toString()
-  return <Navigate replace to={`${bills ? '/bills' : '/envelopes'}${q ? `?${q}` : ''}`} />
+  const m = new URLSearchParams(search).get('m')
+  return <Navigate replace to={m && to === '/month' ? `/month?m=${m}` : to} />
 }
 
 export default function App() {
@@ -160,13 +156,16 @@ function Shell() {
           <Route path="/tasks" element={<Tasks />} />
           {/* той самий список покупок, але як крок із задачі: своя назва і слід назад */}
           <Route path="/tasks/shopping" element={<Shopping />} />
-          <Route path="/envelopes" element={<Envelopes />} />
-          <Route path="/bills" element={<Bills />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/projects/:id" element={<Project />} />
+          <Route path="/month" element={<Month />} />
           {/* «Місяць» розʼїхався на два екрани — старі посилання ведемо далі */}
-          <Route path="/month" element={<MonthRedirect />} />
           <Route path="/shopping" element={<Shopping />} />
-          <Route path="/funds" element={<Funds />} />
-          <Route path="/debts" element={<Debts />} />
+          {/* старі адреси */}
+          <Route path="/envelopes" element={<Legacy to="/month" />} />
+          <Route path="/bills" element={<Legacy to="/month" />} />
+          <Route path="/funds" element={<Legacy to="/projects" />} />
+          <Route path="/debts" element={<Legacy to="/projects" />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/family" element={<SettingsFamily />} />

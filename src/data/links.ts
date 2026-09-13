@@ -1,20 +1,12 @@
 /**
- * Звʼязки між сутностями — один опис графа на весь застосунок.
+ * Звʼязки між сутностями й маршрути до них.
  *
- * До цього кожен екран знав свій шматок: фонд знав про конверт, конверт не знав
- * про фонд, борг не знав ні про що. Через це налаштування одного звʼязку жило
- * там, де його завели, а не там, де його шукають. Тут граф описаний один раз,
- * і будь-який екран питає його з свого боку.
- *
- * Нічого не зберігається (інваріант 4): усе рахується на читанні з наявних полів.
- * Нових колонок у базі це не потребує — звʼязки вже є в даних:
- * `Fund.envelopeId`, `RecurringPlan.envelopeId`, `RecurringPlan.debtId`,
- * `RecurringPlan.fundId`, `Occurrence.fundId`.
+ * У моделі «усе проєкти» граф простий: задача, правило, платіж і запис
+ * посилаються на проєкт. Тут — як описати правило людською мовою і куди
+ * вести, коли людина тапає по згадці іншої сутності.
  */
-import type { Currency, DB, Fund, ID, RecurringPlan } from './types'
-import { debtEnvelopeId, debtStatus, fundStatus, paidBaseByOccurrence } from './store'
-import { clampDayOfMonth, iso, isoDow, longDate, monthKey, parse, today } from '../lib/dates'
-import { toBase } from '../lib/money'
+import type { Currency, DB, ID, RecurringPlan } from './types'
+import { clampDayOfMonth, iso, isoDow, longDate, parse } from '../lib/dates'
 
 /* ───────────────────── правило людською мовою ───────────────────── */
 
@@ -65,6 +57,16 @@ export function nextDue(d: DB, planId: string) {
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
 }
 
+/* ───────────────────── маршрути ───────────────────── */
+
+export const projectRoute = (id: ID) => `/projects/${id}`
+/** Правило відкривається на сторінці свого проєкту. */
+export const ruleRoute = (plan: Pick<RecurringPlan, 'id' | 'projectId'>) =>
+  `/projects/${plan.projectId}?tab=bills&rule=${plan.id}`
+/** Нове правило в проєкті. */
+export const newRuleRoute = (projectId: ID) => `/projects/${projectId}?tab=bills&rule=new`
+export const monthRoute = (month?: string) => month ? `/month?m=${month}` : '/month'
+
 /* ───────────────────── звʼязок як рядок інтерфейсу ───────────────────── */
 
 export type LinkIcon = 'piggy' | 'wallet' | 'list' | 'clock' | 'cart' | 'check'
@@ -72,158 +74,29 @@ export type LinkIcon = 'piggy' | 'wallet' | 'list' | 'clock' | 'cart' | 'check'
 /** Один звʼязок: що це, як називається, скільки просить і куди веде. */
 export interface Link {
   key: string
-  kind: 'fund' | 'plan' | 'debt' | 'envelope'
+  kind: 'project' | 'plan'
   id: ID
   icon: LinkIcon
   title: string
-  /** Коли і як часто — людською мовою. */
   note?: string
   amountMinor?: number
   currency?: Currency
-  /** Маршрут, який відкриває цю сутність на її екрані. */
   to: string
 }
 
-export const envelopeRoute = (id: ID) => `/envelopes?env=${id}`
-export const fundRoute = (id: ID) => `/funds?fund=${id}`
-export const debtRoute = (id: ID) => `/debts?debt=${id}`
-/** Нове правило з уже підставленими конвертом і боргом. */
-export const newRuleRoute = (opts: { envelopeId?: ID; debtId?: ID } = {}) => {
-  const q = new URLSearchParams({ rule: 'new' })
-  if (opts.debtId) q.set('debt', opts.debtId)
-  if (opts.envelopeId) q.set('env', opts.envelopeId)
-  return `/bills?${q}`
-}
-export const ruleRoute = (id: ID) => `/bills?rule=${id}`
-
-const dayText = (day: number) => `${day} числа щомісяця`
-
-function fundLink(d: DB, f: Fund): Link {
-  return {
-    key: `fund:${f.id}`, kind: 'fund', id: f.id, icon: 'piggy',
-    title: f.name,
-    note: f.envelopeId ? dayText(f.contributionDay ?? 1) : 'без нагадування',
-    amountMinor: fundStatus(d, f.id).required,
-    currency: f.currency,
-    to: fundRoute(f.id),
-  }
-}
-
-function planLink(p: RecurringPlan): Link {
+export function planLink(p: RecurringPlan): Link {
   return {
     key: `plan:${p.id}`, kind: 'plan', id: p.id, icon: 'clock',
-    title: p.name,
-    note: ruleText(p),
-    amountMinor: p.expectedMinor,
-    currency: p.currency,
-    to: ruleRoute(p.id),
+    title: p.name, note: ruleText(p),
+    amountMinor: p.expectedMinor, currency: p.currency,
+    to: ruleRoute(p),
   }
 }
 
-/**
- * Що САМО кладе гроші в конверт.
- *
- * Це відповідь на «чим конверт відрізняється від фонду й боргу»: конверт
- * не робить нічого сам, він ПРИЙМАЄ. Фонд, борг і регулярне правило —
- * джерела, які щомісяця в нього щось кладуть.
- */
-export function envelopeSources(d: DB, envelopeId: ID): Link[] {
-  const funds = d.funds
-    .filter(f => !f.archived && f.envelopeId === envelopeId)
-    .map(f => fundLink(d, f))
-
-  const plans = d.recurringPlans
-    .filter(p => p.active && p.envelopeId === envelopeId)
-    .map(planLink)
-
-  // Борг потрапляє в конверт двома шляхами: через регулярне правило з debtId
-  // (уже в plans) або просто тому, що це конверт боргів.
-  const throughPlan = new Set(plans.map(p => p.id))
-  const debts = debtEnvelopeId(d) === envelopeId
-    ? d.debts
-        .filter(x => !x.closedOn && !d.recurringPlans.some(p =>
-          p.active && p.debtId === x.id && throughPlan.has(p.id)))
-        .map<Link>(x => ({
-          key: `debt:${x.id}`, kind: 'debt', id: x.id, icon: 'list',
-          title: x.name,
-          note: x.monthlyPaymentMinor ? 'платимо вручну' : 'без щомісячного платежу',
-          amountMinor: x.monthlyPaymentMinor || debtStatus(d, x.id).remaining,
-          currency: x.currency,
-          to: debtRoute(x.id),
-        }))
-    : []
-
-  return [...funds, ...plans, ...debts]
-}
-
-/**
- * Скільки конверт просить цього місяця. Ділимо на автоматичне (платежі, які
- * створилися самі) і вже закрите — щоб у плані було видно, яка частина суми
- * узагалі не в руках людини.
- */
-export function envelopeAsk(d: DB, envelopeId: ID, month: string) {
-  let open = 0, paid = 0
-  const paidBase = paidBaseByOccurrence(d)
-  for (const o of d.occurrences) {
-    if (o.envelopeId !== envelopeId || monthKey(o.dueDate) !== month) continue
-    // оплачене — із замороженим курсом запису, очікуване — за сьогоднішнім
-    if (o.status === 'paid') paid += paidBase.get(o.id) ?? toBase(o.actualMinor ?? o.expectedMinor, o.currency, d.rates)
-    else if (o.status === 'due' || o.status === 'projected') open += toBase(o.expectedMinor, o.currency, d.rates)
-  }
-  return { open, paid, auto: open + paid }
-}
-
-/** Фонди, які ще нікуди не привʼязані — кандидати на привʼязку до конверта. */
-export function unlinkedFunds(d: DB): Fund[] {
-  return d.funds.filter(f => !f.archived && !f.envelopeId)
-}
-
-/* ───────────────────── погляд з іншого боку ───────────────────── */
-
-/** Куди фонд надсилає нагадування і що з цього вийшло цього місяця. */
-export function fundLinks(d: DB, fundId: ID): Link[] {
-  const f = d.funds.find(x => x.id === fundId)
-  if (!f) return []
-  const out: Link[] = []
-
-  const env = f.envelopeId ? d.envelopes.find(e => e.id === f.envelopeId) : undefined
-  if (env) {
-    out.push({
-      key: `env:${env.id}`, kind: 'envelope', id: env.id, icon: 'wallet',
-      title: env.name,
-      note: `внесок ${dayText(f.contributionDay ?? 1)}`,
-      amountMinor: fundStatus(d, f.id).required,
-      currency: f.currency,
-      to: envelopeRoute(env.id),
-    })
-  }
-
-  // Правило, яке цей фонд фінансує: фонд збирає — правило витрачає.
-  for (const p of d.recurringPlans.filter(p => p.active && p.fundId === f.id)) {
-    out.push({ ...planLink(p), note: `звідси платимо · ${ruleText(p)}` })
-  }
-
-  return out
-}
-
-/** Чим гаситься борг: правило, конверт. */
-export function debtLinks(d: DB, debtId: ID): Link[] {
-  const out: Link[] = []
-
-  for (const p of d.recurringPlans.filter(p => p.active && p.debtId === debtId)) {
-    out.push(planLink(p))
-  }
-
-  const envId = debtEnvelopeId(d)
-  const env = envId ? d.envelopes.find(e => e.id === envId) : undefined
-  if (env) {
-    out.push({
-      key: `env:${env.id}`, kind: 'envelope', id: env.id, icon: 'wallet',
-      title: env.name,
-      note: 'виплати лягають у цей конверт',
-      to: envelopeRoute(env.id),
-    })
-  }
-
-  return out
+/** Правила проєкту, найближчі першими. */
+export function projectPlans(d: DB, projectId: ID): RecurringPlan[] {
+  return d.recurringPlans
+    .filter(p => p.projectId === projectId)
+    .sort((a, b) => (nextDue(d, a.id)?.dueDate ?? '9999').localeCompare(nextDue(d, b.id)?.dueDate ?? '9999')
+      || a.name.localeCompare(b.name, 'uk'))
 }

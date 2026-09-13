@@ -14,7 +14,7 @@ const schema = files.map(f => readFileSync(`sql/${f}`, 'utf8')).join('\n')
 const map = readFileSync('src/data/cloud-map.ts', 'utf8')
 
 const real = new Map()
-for (const m of schema.matchAll(/create table (\w+) \(\n(.*?)\n\);/gs)) {
+for (const m of schema.matchAll(/create table (?:if not exists )?(?:public\.)?(\w+) \(\n(.*?)\n\);/gs)) {
   const cols = new Set()
   for (const line of m[2].split('\n')) {
     const t = line.trim()
@@ -44,7 +44,13 @@ for (const block of schema.matchAll(/tables text\[\] := array\[(.*?)\];(.*?)end 
 }
 
 let bad = 0
+// Кожна сутність у cloud-map ОБОВʼЯЗКОВО має пару table + columns одна за одною.
+// Якщо між ними опинився коментар, регулярка її не побачить — і перевірка
+// мовчки пропустить таблицю. Тому окремо рахуємо, що звірено все.
+const declared = [...map.matchAll(/table: '(\w+)'/g)].length
+let checked = 0
 for (const m of map.matchAll(/table: '(\w+)',\s*\n\s*columns: '([^']+)'/g)) {
+  checked++
   const [, table, cols] = m
   const have = real.get(table)
   if (!have) { console.error(`✗ ${table}: такої таблиці немає в схемі`); bad++; continue }
@@ -54,6 +60,11 @@ for (const m of map.matchAll(/table: '(\w+)',\s*\n\s*columns: '([^']+)'/g)) {
     console.error(`  у схемі є: ${[...have].sort().join(', ')}`)
     bad++
   }
+}
+
+if (checked !== declared) {
+  console.error(`✗ звірено ${checked} з ${declared} таблиць: між table і columns щось стоїть`)
+  bad++
 }
 
 if (bad) {

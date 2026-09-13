@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { AttachButton, Btn, DateInput, Field, Input, Pill, Segmented, Select, Sheet, toast } from '../ui'
-import { useDB, addEntry } from '../data/store'
+import { useDB, addEntry, freeProject } from '../data/store'
+import { payableProjects } from './RuleForm'
 import { SYMBOL, money, parseAmount } from '../lib/money'
-import type { Currency, DB, Envelope, EntryKind } from '../data/types'
+import type { Currency, DB, EntryKind, Project } from '../data/types'
 import { addDays, monthKey, today } from '../lib/dates'
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', '⌫']
@@ -23,32 +24,28 @@ function formatRate(rate: number): string {
   return rate.toLocaleString('uk-UA', { maximumFractionDigits: 4 }).replace(/[\s\u00A0]/g, NNBSP)
 }
 
-// Конверти, куди найчастіше пишуть витрати останнім часом. Рахуємо на читанні
+// Проєкти, куди найчастіше пишуть витрати останнім часом. Рахуємо на читанні
 // з записів, нічого не зберігаючи (інваріант 4): звичка змінюється — підказки теж.
-function suggestEnvelopes(db: DB): Envelope[] {
-  const usable = new Map(db.envelopes
-    .filter(e => e.kind !== 'income' && !e.archived)
-    .map(e => [e.id, e]))
+function suggestProjects(db: DB, usable: Project[]): Project[] {
+  const byId = new Map(usable.map(p => [p.id, p]))
   const since = addDays(today(), -SUGGEST_DAYS)
   const stats = new Map<string, { n: number; last: string }>()
   for (const e of db.entries) {
-    if (e.kind !== 'expense' || !e.envelopeId || e.occurredOn < since || !usable.has(e.envelopeId)) continue
-    const cur = stats.get(e.envelopeId) ?? { n: 0, last: '' }
+    if ((e.kind !== 'expense' && e.kind !== 'repay') || !e.projectId
+      || e.occurredOn < since || !byId.has(e.projectId)) continue
+    const cur = stats.get(e.projectId) ?? { n: 0, last: '' }
     cur.n++
     if (e.occurredOn > cur.last) cur.last = e.occurredOn
-    stats.set(e.envelopeId, cur)
+    stats.set(e.projectId, cur)
   }
   if (stats.size) {
     return [...stats.entries()]
       .sort(([, a], [, b]) => b.n - a.n || b.last.localeCompare(a.last))
       .slice(0, SUGGEST_MAX)
-      .map(([id]) => usable.get(id)!)
+      .map(([id]) => byId.get(id)!)
   }
-  // новий дім без історії: змінні витрати — найімовірніше, що пишуть першими
-  return [...usable.values()]
-    .filter(e => e.kind === 'variable')
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .slice(0, SUGGEST_MAX)
+  // новий дім без історії: проєкти «витрачати» — найімовірніше, куди пишуть першими
+  return usable.filter(p => p.direction === 'spend').slice(0, SUGGEST_MAX)
 }
 
 export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -59,50 +56,46 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
   const [note, setNote] = useState('')
   const [date, setDate] = useState<string | undefined>(today())
 
-  const spendable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
-  const incoming = db.envelopes.filter(e => e.kind === 'income' && !e.archived)
-  const suggested = useMemo(() => suggestEnvelopes(db), [db.envelopes, db.entries])
-  // конверт запам'ятовується окремо для кожного типу: списки не перетинаються
-  const [expenseChoice, setExpenseEnv] = useState('')
+  // Витрата можлива в будь-який активний проєкт, крім «Вільних»: без проєкту
+  // вона й так лягає у вільні. «Без грошей» теж пропускаємо — там лише задачі.
+  const spendable = useMemo(
+    () => payableProjects(db).filter(p => p.direction !== 'none'),
+    [db.projects],
+  )
+  const suggested = useMemo(() => suggestProjects(db, spendable), [spendable, db.entries])
+  const [choice, setChoice] = useState('')
   const [pickOther, setPickOther] = useState(false)
-  const [incomeChoice, setIncomeEnv] = useState('')
 
   // Вибір скидається при кожному відкритті листа: компонент живе весь час,
-  // а конверти до входу в хмару були демо-даними — їхні id у запис іти не мають.
+  // а проєкти до входу в хмару були демо-даними — їхні id у запис іти не мають.
   const [wasOpen, setWasOpen] = useState(false)
   if (open !== wasOpen) {
     setWasOpen(open)
     if (open) {
-      setExpenseEnv(suggested[0]?.id ?? spendable[0]?.id ?? '')
-      setIncomeEnv(incoming[0]?.id ?? '')
+      setChoice(suggested[0]?.id ?? '')
       setPickOther(false)
     }
   }
 
-  // Перевірка на читанні: конверт могли видалити або дані могли замінитись,
-  // поки лист відкритий. Витрата без конверта допустима, дохід показує перший
-  // наявний — той самий, що бачить людина в Select.
-  const expenseEnv = spendable.some(e => e.id === expenseChoice) ? expenseChoice : ''
-  const incomeEnv = incoming.some(e => e.id === incomeChoice) ? incomeChoice : incoming[0]?.id ?? ''
+  // Перевірка на читанні: проєкт могли завершити або дані могли замінитись,
+  // поки лист відкритий. Витрата без проєкту допустима — це «Вільні гроші».
+  const project = spendable.find(p => p.id === choice)
+  const projectId = project?.id ?? ''
 
-  const envelopes = kind === 'income' ? incoming : spendable
-  const envelopeId = kind === 'income' ? incomeEnv : expenseEnv
-  const setEnvelopeId = kind === 'income' ? setIncomeEnv : setExpenseEnv
-
-  // шаблони: найчастіші трійки (конверт, валюта, сума) з історії витрат.
+  // шаблони: найчастіші трійки (проєкт, валюта, сума) з історії витрат.
   // Суму групуємо з точністю до гривні/долара — копійки не роблять запис іншим.
   const presets = useMemo(() => {
-    const usable = new Set(db.envelopes.filter(e => e.kind !== 'income' && !e.archived).map(e => e.id))
-    const counts = new Map<string, { envelopeId: string; currency: Currency; amount: number; n: number }>()
+    const usable = new Set(spendable.map(p => p.id))
+    const counts = new Map<string, { projectId: string; currency: Currency; amount: number; n: number }>()
     for (const e of db.entries) {
-      if (e.kind !== 'expense' || !e.envelopeId || !usable.has(e.envelopeId)) continue
+      if ((e.kind !== 'expense' && e.kind !== 'repay') || !e.projectId || !usable.has(e.projectId)) continue
       const amount = Math.max(100, Math.round(e.amountMinor / 100) * 100)
-      const k = `${e.envelopeId}|${e.currency}|${amount}`
-      const cur = counts.get(k) ?? { envelopeId: e.envelopeId, currency: e.currency, amount, n: 0 }
+      const k = `${e.projectId}|${e.currency}|${amount}`
+      const cur = counts.get(k) ?? { projectId: e.projectId, currency: e.currency, amount, n: 0 }
       cur.n++; counts.set(k, cur)
     }
     return [...counts.values()].sort((a, b) => b.n - a.n).slice(0, 4)
-  }, [db.entries, db.envelopes])
+  }, [db.entries, spendable])
 
   const minor = parseAmount(raw)
   const press = (k: string) => {
@@ -112,32 +105,34 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
   }
   const submit = () => {
     if (!minor) return
-    addEntry({
-      kind,
-      amountMinor: minor,
-      currency,
-      envelopeId: envelopeId || undefined,
-      note: note.trim() || undefined,
-      occurredOn: date || today(),
-    })
+    const common = { amountMinor: minor, currency, note: note.trim() || undefined, occurredOn: date || today() }
+    if (kind === 'income') {
+      // дохід завжди у вільні: розкласти по проєктах — окрема свідома дія
+      addEntry({ ...common, kind: 'income', projectId: freeProject(db)?.id })
+    } else {
+      addEntry({ ...common, kind: project?.direction === 'repay' ? 'repay' : 'expense', projectId: projectId || undefined })
+    }
     // оптимістичне оновлення без спінера потребує сліду, інакше незрозуміло,
     // чи взагалі щось сталось: лист закрився і все
-    const env = db.envelopes.find(e => e.id === envelopeId)
-    toast(`${kind === 'income' ? 'Дохід' : 'Записано'}: ${money(minor, currency)}${env ? ' · ' + env.name : ''}`)
+    const label = kind === 'income' ? '' : project ? ' · ' + project.name : ''
+    toast(`${kind === 'income' ? 'Дохід' : 'Записано'}: ${money(minor, currency)}${label}`)
     setRaw(''); setNote(''); setDate(today()); setPickOther(false)
     onClose()
   }
 
   // підсумок за місяць вибраної дати, а не завжди за поточний
   const month = monthKey(date || today())
+  const free = freeProject(db)
   const sumThis = db.entries
-    .filter(e => e.kind === kind && monthKey(e.occurredOn) === month
-      && (kind === 'income' || e.envelopeId === envelopeId))
+    .filter(e => monthKey(e.occurredOn) === month && (kind === 'income'
+      ? e.kind === 'income'
+      : (e.kind === 'expense' || e.kind === 'repay') && (projectId
+        ? e.projectId === projectId
+        : !e.projectId || e.projectId === free?.id)))
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
   // вибраний поза підказками теж стає пілюлею — інакше вибір не видно
-  const picked = spendable.find(e => e.id === expenseEnv)
-  const pills = picked && !suggested.some(e => e.id === picked.id) ? [...suggested, picked] : suggested
+  const pills = project && !suggested.some(p => p.id === project.id) ? [...suggested, project] : suggested
 
   return (
     <Sheet open={open} onClose={onClose} title={kind === 'income' ? 'Дохід' : 'Витрата'}>
@@ -154,33 +149,35 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
         <div className="text-[12.5px] text-faint mt-0.5">
           {kind === 'income'
             ? <>дохід цього місяця — {money(sumThis)}</>
-            : <>у цьому місяці на цей конверт — {money(sumThis)}</>}
+            : projectId
+              ? <>у цьому місяці на цей проєкт — {money(sumThis)}</>
+              : <>у цьому місяці без проєкту — {money(sumThis)}</>}
         </div>
       </div>
 
       {kind === 'expense' && presets.length > 0 && !raw && (
         <div className="flex gap-1.5 flex-wrap justify-center mb-3">
           {presets.map((p, i) => {
-            const env = db.envelopes.find(e => e.id === p.envelopeId)
+            const pr = spendable.find(x => x.id === p.projectId)
             return (
               <Pill key={i}
-                onClick={() => { setExpenseEnv(p.envelopeId); setCurrency(p.currency); setRaw(String(p.amount / 100)) }}
-                title={`${env?.name}, ${money(p.amount, p.currency)}`}>
-                <span className="text-[12.5px]">{env?.name} · <span className="num">{money(p.amount, p.currency)}</span></span>
+                onClick={() => { setChoice(p.projectId); setCurrency(p.currency); setRaw(String(p.amount / 100)) }}
+                title={`${pr?.name}, ${money(p.amount, p.currency)}`}>
+                <span className="text-[12.5px]">{pr?.name} · <span className="num">{money(p.amount, p.currency)}</span></span>
               </Pill>
             )
           })}
         </div>
       )}
 
-      {kind === 'expense' ? (
+      {kind === 'expense' && (
         <div className="mb-2">
-          <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Конверт">
-            {pills.map(e => (
-              <Pill key={e.id} active={e.id === expenseEnv}
-                // конверт необов'язковий: повторний тап знімає вибір
-                onClick={() => setExpenseEnv(cur => (cur === e.id ? '' : e.id))}>
-                {e.name}
+          <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Проєкт">
+            {pills.map(p => (
+              <Pill key={p.id} active={p.id === projectId}
+                // проєкт необов'язковий: повторний тап знімає вибір — витрата йде у вільні
+                onClick={() => setChoice(cur => (cur === p.id ? '' : p.id))}>
+                {p.name}
               </Pill>
             ))}
             {!pickOther && spendable.length > pills.length && (
@@ -189,17 +186,11 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
           </div>
           {pickOther && (
             <div className="mt-1.5">
-              <Select value={expenseEnv} placeholder="Без конверта"
-                onChange={v => { setExpenseEnv(v); setPickOther(false) }}
-                options={spendable.map(e => ({ value: e.id, label: e.name }))} />
+              <Select value={projectId} placeholder="Без проєкту"
+                onChange={v => { setChoice(v); setPickOther(false) }}
+                options={spendable.map(p => ({ value: p.id, label: p.name }))} />
             </div>
           )}
-        </div>
-      ) : (
-        <div className="mb-2">
-          <Select value={envelopeId} onChange={setEnvelopeId}
-            options={envelopes.map(e => ({ value: e.id, label: e.name }))}
-            placeholder={envelopes.length ? undefined : 'Конвертів немає'} />
         </div>
       )}
 

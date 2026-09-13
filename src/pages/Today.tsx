@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Btn, Empty, Icon, PriorityMark, Rows } from '../ui'
+import { Link, useNavigate } from 'react-router-dom'
+import { Btn, Empty, Icon, PriorityMark, Progress, Rows } from '../ui'
 import { BillRow } from '../components/BillRow'
-import { useDB, monthSummary, completeTask, upcomingOccurrences, fundBalance, debtStatus, shoppingPending } from '../data/store'
+import {
+  useDB, monthView, completeTask, upcomingOccurrences, shoppingPending, projectStatus, freeProject,
+} from '../data/store'
 import { hasIncome, setupSteps } from '../data/setup'
-import { newRuleRoute } from '../data/links'
-import { money, moneyShort, toBase } from '../lib/money'
+import { projectRoute } from '../data/links'
+import { money, moneyShort } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
 import { readPinShopping, readSetupHidden, writeSetupHidden } from '../lib/prefs'
+import type { DB } from '../data/types'
 
 export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
   const db = useDB()
-  const sum = monthSummary(db, thisMonth())
+  const view = monthView(db, thisMonth())
   const t = today()
 
   const mine = db.tasks
@@ -30,13 +33,12 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
   // закріплення керується на екрані «Задачі»; тут лише поважаємо вибір
   const pending = shoppingPending(db)
   const shopRow = pending && readPinShopping() ? pending : null
-  // Залишки в різних валютах зводимо до гривні за сьогоднішнім курсом —
-  // складати долари з гривнями як є не можна (інваріанти 1 і 3).
-  const openDebts = db.debts.filter(d => !d.closedOn)
-  const fundsTotal = db.funds.reduce((s, f) => s + toBase(fundBalance(db, f.id), f.currency, db.rates), 0)
-  const debtLeft = openDebts.reduce((s, d) => s + toBase(debtStatus(db, d.id).remaining, d.currency, db.rates), 0)
-  const fundsApprox = db.funds.some(f => f.currency !== 'UAH' && fundBalance(db, f.id) !== 0) ? '≈ ' : ''
-  const debtApprox = openDebts.some(d => d.currency !== 'UAH' && debtStatus(db, d.id).remaining > 0) ? '≈ ' : ''
+  const free = freeProject(db)
+  // monthView зводить «відкласти» до гривні за сьогоднішнім курсом —
+  // якщо серед внесків є валютні, сума приблизна (інваріант 3).
+  const setAsideApprox = view.states.some(s => s.project.direction === 'save'
+    && s.project.currency !== 'UAH' && s.toSetAside > 0) ? '≈ ' : ''
+  const incomeStep = setupSteps(db).find(s => s.key === 'income')
 
   return (
     <div className="max-w-[760px] mx-auto">
@@ -48,19 +50,22 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
 
       <section className="px-4 sm:px-6">
         {hasIncome(db) ? (
-          <Link to="/envelopes" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
-            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
-            <div className={`text-[30px] font-semibold num tracking-tight ${sum.free < 0 ? 'text-warn' : ''}`}>{money(sum.free)}</div>
-            <div className="text-[12.5px] text-faint mt-1 num">
-              ще платити {money(sum.obligationsLeft)} · у фонди {money(sum.fundsRequired)}
-            </div>
+          <Link to="/month" className="block rounded-xl border border-line bg-surface p-4 hover:border-line2 transition-colors">
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільні зараз</div>
+            <div className={`text-[30px] font-semibold num tracking-tight ${view.freeNow < 0 ? 'text-warn' : ''}`}>{money(view.freeNow)}</div>
+            {view.forecast !== undefined && (
+              <div className="text-[12.5px] text-faint mt-1 num">
+                прогноз на кінець місяця{' '}
+                <span className={view.forecast < 0 ? 'text-warn' : 'text-muted'}>{money(view.forecast)}</span>
+              </div>
+            )}
           </Link>
         ) : (
-          // Без доходу «вільно 0 ₴» — не число, а шум: воно нічого не каже
+          // Без доходу «вільні 0 ₴» — не число, а шум: воно нічого не каже
           // і виглядає як «грошей немає». Замість нього — що зробити.
-          <Link to={newRuleRoute({ envelopeId: db.envelopes.find(e => e.kind === 'income')?.id })}
+          <Link to={incomeStep?.to ?? '/projects'}
             className="block rounded-xl border border-dashed border-line2 bg-surface p-4 hover:border-accent transition-colors">
-            <div className="text-[12px] uppercase tracking-wider text-faint">Вільно цього місяця</div>
+            <div className="text-[12px] uppercase tracking-wider text-faint">Вільні гроші</div>
             <div className="text-[14px] mt-1">Додайте дохід — і тут зʼявиться, скільки лишається після платежів.</div>
             <div className="text-[12.5px] text-accent mt-2">Додати зарплату</div>
           </Link>
@@ -119,7 +124,7 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
       <section className="mt-6">
         <div className="px-4 sm:px-6 mb-1 flex items-baseline justify-between">
           <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium">Найближчі сім днів</h2>
-          <Link to="/bills" className="text-[12.5px] text-accent">платежі</Link>
+          <Link to="/month" className="text-[12.5px] text-accent">платежі</Link>
         </div>
         {soon.length ? (
           <Rows>
@@ -128,9 +133,11 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
         ) : <Empty>Найближчим тижнем платежів немає</Empty>}
       </section>
 
+      <Goals db={db} />
+
       <section className="px-4 sm:px-6 mt-6 grid grid-cols-3 gap-2">
-        <Tile to="/funds" label="У фондах" value={fundsApprox + moneyShort(fundsTotal)} />
-        <Tile to="/debts" label="Борг" value={debtApprox + moneyShort(debtLeft)} />
+        <Tile to={free ? projectRoute(free.id) : '/projects'} label="Вільні" value={moneyShort(view.freeNow)} warn={view.freeNow < 0} />
+        <Tile to="/month" label="Відкласти" value={setAsideApprox + moneyShort(view.toSetAside)} />
         <Tile to="/shopping" label="У списку" value={String(cart)} />
       </section>
 
@@ -141,12 +148,70 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
   )
 }
 
+/** «33 000 / 60 000 ₴» — символ валюти один раз, в кінці. */
+function pair(a: number, b: number, c: DB['projects'][number]['currency']) {
+  return `${money(a, c).replace(/\s*[₴$€]$/, '')} / ${money(b, c)}`
+}
 
-function Tile({ to, label, value }: { to: string; label: string; value: string }) {
+/**
+ * Рух до цілей: накопичення й борги, закріплені першими. Лише чотири —
+ * решта живе в «Проєктах»; тут це нагадування, а не список.
+ */
+function Goals({ db }: { db: DB }) {
+  const nav = useNavigate()
+  const goals = db.projects
+    .filter(p => !p.isFree && p.status === 'active' && (p.direction === 'save' || p.direction === 'repay'))
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || a.sortOrder - b.sortOrder)
+    .slice(0, 4)
+    .map(p => projectStatus(db, p.id))
+  if (!goals.length) return null
+
+  return (
+    <section className="mt-6">
+      <div className="px-4 sm:px-6 mb-1 flex items-baseline justify-between">
+        <h2 className="text-[12px] uppercase tracking-wider text-faint font-medium">Рух до цілей</h2>
+        <Link to="/projects" className="text-[12.5px] text-accent">проєкти</Link>
+      </div>
+      <Rows>
+        {goals.map(s => {
+          const p = s.project
+          const c = p.currency
+          const save = p.direction === 'save'
+          // для боргу «цього місяця ще» — те саме «треба», що й «відкласти» для накопичення
+          const ask = save ? s.toSetAside : Math.max(0, s.required - s.monthActual)
+          const figure = save
+            ? (s.target ? pair(s.balance, s.target, c) : money(s.balance, c))
+            : s.remaining !== undefined ? `лишилось ${money(s.remaining, c)}` : money(s.monthActual, c)
+          return (
+            <li key={p.id}>
+              <button type="button" onClick={() => nav(projectRoute(p.id))}
+                className="w-full text-left px-4 sm:px-6 py-2.5 hover:bg-surface2 transition-colors">
+                <div className="flex items-baseline gap-3">
+                  <span className="flex-1 min-w-0 text-[14px] truncate">{p.name}</span>
+                  <span className="shrink-0 text-[13px] num text-muted">{figure}</span>
+                </div>
+                {(s.target ?? 0) > 0 && (
+                  <div className="mt-1.5"><Progress value={s.progress} height={4} /></div>
+                )}
+                {ask > 0 && (
+                  <div className="mt-1 text-[11.5px] text-faint num">
+                    {save ? 'відкласти ще' : 'цього місяця ще'} {money(ask, c)}
+                  </div>
+                )}
+              </button>
+            </li>
+          )
+        })}
+      </Rows>
+    </section>
+  )
+}
+
+function Tile({ to, label, value, warn }: { to: string; label: string; value: string; warn?: boolean }) {
   return (
     <Link to={to} className="rounded-xl border border-line bg-surface px-3 py-2.5 min-h-[62px] flex flex-col justify-between hover:border-line2 transition-colors">
       <div className="text-[11px] text-faint leading-tight">{label}</div>
-      <div className="text-[14.5px] font-medium num leading-tight">{value}</div>
+      <div className={`text-[14.5px] font-medium num leading-tight ${warn ? 'text-warn' : ''}`}>{value}</div>
     </Link>
   )
 }

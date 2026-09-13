@@ -14,11 +14,9 @@ import { PushSettings } from './PushSettings'
 const TITLES: Record<string, string> = {
   '/': 'Сьогодні',
   '/tasks': 'Задачі',
-  '/envelopes': 'Конверти',
-  '/bills': 'Платежі',
+  '/projects': 'Проєкти',
+  '/month': 'Місяць',
   '/shopping': 'Покупки',
-  '/funds': 'Фонди і цілі',
-  '/debts': 'Борги',
   '/history': 'Історія',
   '/settings': 'Ще',
   '/settings/family': "Сім'я і валюти",
@@ -39,8 +37,11 @@ export function TopBar() {
   const nav = useNavigate()
   const { pathname } = useLocation()
 
-  const title = TITLES[pathname] ?? 'Family Flow'
-  const parent = TRAIL[pathname]
+  // сторінка проєкту: назва — назва самого проєкту, слід — до списку
+  const projectPage = /^\/projects\/([^/]+)$/.exec(pathname)
+  const project = projectPage ? db.projects.find(p => p.id === projectPage[1]) : undefined
+  const title = project?.name ?? TITLES[pathname] ?? 'Family Flow'
+  const parent = projectPage ? { to: '/projects', label: 'Проєкти' } : TRAIL[pathname]
 
   const pending = usePendingCount()
   const [open, setOpen] = useState(false)

@@ -4,7 +4,7 @@ import { Btn, Icon, IconButton, LinkChip, Sheet, toast } from '../ui'
 import {
   useDB, confirmOccurrence, skipOccurrence, unconfirmOccurrence, isIncomeOccurrence,
 } from '../data/store'
-import { envelopeRoute, fundRoute, ruleRoute, ruleText } from '../data/links'
+import { projectRoute, ruleRoute, ruleText } from '../data/links'
 import { money, parseAmount } from '../lib/money'
 import { relativeDue, shortDate, today } from '../lib/dates'
 import type { DB, Occurrence } from '../data/types'
@@ -76,8 +76,7 @@ export function BillRow({ o, compact = false, onOpen }: {
   const [editing, setEditing] = useState(false)
   const assignee = db.members.find(m => m.id === o.assigneeId)
   const plan = o.planId ? db.recurringPlans.find(p => p.id === o.planId) : undefined
-  const fund = o.fundId ? db.funds.find(f => f.id === o.fundId) : undefined
-  const envelope = db.envelopes.find(e => e.id === o.envelopeId)
+  const project = db.projects.find(p => p.id === o.projectId)
   const paid = o.status === 'paid'
   const settled = paid || o.status === 'skipped'
   const overdue = !settled && o.dueDate < today()
@@ -126,16 +125,16 @@ export function BillRow({ o, compact = false, onOpen }: {
             {assignee && !settled && <span> · {assignee.name}</span>}
           </div>
 
-          {!compact && !settled && (envelope || fund || plan) && (
+          {!compact && !settled && (project || plan) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {/* звідки цей платіж узявся і куди лягає — одним тапом, без пошуку по екранах */}
-              {fund
-                ? <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
-                    внесок у «{fund.name}»
-                  </LinkChip>
-                : plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan.id))}>{ruleText(plan)}</LinkChip>}
-              {envelope && (
-                <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
+              {/* звідки цей платіж узявся і до якого проєкту належить — одним тапом */}
+              {plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan))}>{ruleText(plan)}</LinkChip>}
+              {project && !project.isFree && (
+                <LinkChip icon={project.direction === 'save' ? 'piggy' : project.direction === 'repay' ? 'list' : 'wallet'}
+                  tone={project.direction === 'save' || project.direction === 'repay' ? 'accent' : 'neutral'}
+                  onClick={() => nav(projectRoute(project.id))}>
+                  {project.name}
+                </LinkChip>
               )}
             </div>
           )}

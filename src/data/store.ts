@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type {
   DB, Occurrence, Task, Currency, EntryKind, ID, Priority,
-  Envelope, EnvelopeKind, Fund, Debt, RecurringPlan, TaskTemplate, Member, Rates,
+  Project, ProjectStatus, RecurringPlan, TaskTemplate, Member, Rates,
 } from './types'
 import { emptyDB, seed } from './seed'
 import { notifyAssigned } from './push'
@@ -13,7 +13,13 @@ import { SyncError, pullAll, pullRates, pushDiff, pushMembers, pushRates, watchH
 import { toast } from '../ui/Toast'
 import { drop, enqueue, peek, queueSize, clearQueue } from './queue'
 
-const KEY = 'familyflow.v1'
+/*
+ * v2 — модель «усе проєкти». Дані v1 (конверти, фонди, борги) сюди не
+ * переносяться: у локальному режимі це демо, а в хмарі їх переніс
+ * sql/14_projects.sql, і дім однаково перетягується з бази при вході.
+ */
+const KEY = 'familyflow.v2'
+const OLD_KEYS = ['familyflow.v1']
 const HORIZON_MONTHS = 13
 const TASK_HORIZON_DAYS = 7
 
@@ -22,8 +28,17 @@ const listeners = new Set<() => void>()
 
 function init(): DB {
   try {
+    // Черга старого формату містить знімки з конвертами — у нову схему їх
+    // не відправити, тож прибираємо разом зі старим сховищем.
+    if (OLD_KEYS.some(k => localStorage.getItem(k) !== null)) {
+      OLD_KEYS.forEach(k => localStorage.removeItem(k))
+      clearQueue()
+    }
     const raw = localStorage.getItem(KEY)
-    if (raw) return materialize(JSON.parse(raw) as DB)
+    if (raw) {
+      const parsed = JSON.parse(raw) as DB
+      if (Array.isArray(parsed.projects)) return materialize(parsed)
+    }
   } catch { /* впав парсинг — починаємо з чистого */ }
   return materialize(seed())
 }
@@ -278,7 +293,7 @@ function materialize(d: DB): DB {
       if (existing.has(k)) continue
       existing.add(k)
       d.occurrences.push({
-        id: stableId(`occ:${p.id}:${date}`), planId: p.id, envelopeId: p.envelopeId, name: p.name,
+        id: stableId(`occ:${p.id}:${date}`), planId: p.id, projectId: p.projectId, name: p.name,
         dueDate: date, expectedMinor: p.expectedMinor, currency: p.currency,
         status: date <= t ? 'due' : 'projected', assigneeId: p.assigneeId,
       })
@@ -286,38 +301,6 @@ function materialize(d: DB): DB {
   }
   for (const o of d.occurrences) {
     if (o.status === 'projected' && o.dueDate <= t) o.status = 'due'
-  }
-
-  // Внески у фонди — такі самі платежі, як рахунки.
-  // Сума ПОХІДНА: fundStatus рахує її щомісяця заново, бо вона залежить від
-  // того, скільки вже зібрано і скільки місяців лишилось. Тому перезаписуємо
-  // очікування на ще не підтверджених — інакше в чеклісті висіла б цифра,
-  // порахована місяць тому.
-  for (const f of d.funds) {
-    if (f.archived || !f.envelopeId) continue
-    const day = f.contributionDay ?? 1
-    const cur = parse(t.slice(0, 8) + '01')
-    for (let i = 0; i < HORIZON_MONTHS; i++) {
-      const y = cur.getFullYear(), m1 = cur.getMonth() + 1
-      const dd = clampDayOfMonth(y, m1, day)
-      const date = `${y}-${String(m1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
-      const id = stableId(`fund:${f.id}:${date}`)
-      const existing = d.occurrences.find(o => o.id === id)
-      const required = fundStatus(d, f.id).required
-
-      if (!existing) {
-        if (required > 0) {
-          d.occurrences.push({
-            id, envelopeId: f.envelopeId, fundId: f.id, name: f.name,
-            dueDate: date, expectedMinor: required, currency: f.currency,
-            status: date <= t ? 'due' : 'projected',
-          })
-        }
-      } else if (existing.status !== 'paid' && existing.status !== 'skipped') {
-        existing.expectedMinor = required
-      }
-      cur.setMonth(cur.getMonth() + 1)
-    }
   }
 
   // задачі з шаблонів
@@ -434,143 +417,278 @@ function expandDates(
 /* ───────────────────────── похідні дані ───────────────────────── */
 /* Нічого з цього не зберігається — усе рахується на читанні. */
 
-export function envelopeMonth(d: DB, month: string) {
-  return d.envelopes
-    .filter(e => !e.archived && e.kind !== 'income')
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(e => {
-      const planned = d.planLines.find(p => p.envelopeId === e.id && p.month === month)?.plannedMinor ?? 0
-      // debt_payment теж витрата місяця: гроші пішли з рахунку. Той самий запис
-      // паралельно читається як виплата по боргу — дублювання немає.
-      const actual = d.entries
-        .filter(x => (x.kind === 'expense' || x.kind === 'debt_payment')
-          && x.envelopeId === e.id && monthKey(x.occurredOn) === month)
-        .reduce((s, x) => s + x.amountBaseMinor, 0)
-      return { envelope: e, planned, actual, remaining: planned - actual }
-    })
+/* ─────────── проєкти: куди лягають гроші ───────────
+ *
+ * Два види «кишень», у яких гроші лежать: «Вільні гроші» і проєкти
+ * «накопичувати». Проєкти «витрачати» й «повертати» грошей не тримають —
+ * вони кажуть, НА ЩО пішло, а платять із вільних або з вибраного накопичення.
+ * Тому баланс мають лише кишені, а в інших проєктів — факт проти орієнтира. */
+
+/** Системний проєкт «Вільні гроші». У локальному режимі й до першого pull може бути відсутнім. */
+export function freeProject(d: DB): Project | undefined {
+  return d.projects.find(p => p.isFree && p.status !== 'archived')
 }
 
-export function fundBalance(d: DB, fundId: ID) {
-  return d.entries.reduce((s, e) => {
-    if (e.fundId !== fundId) return s
-    if (e.kind === 'fund_in') return s + e.amountMinor
-    if (e.kind === 'fund_out') return s - e.amountMinor
-    return s
-  }, 0)
+const FREE = '__free__'
+
+/** Кишеня, з якої або в яку йдуть гроші проєкту. */
+function pocketOf(d: DB, projectId: ID | undefined): string {
+  const p = projectId ? d.projects.find(x => x.id === projectId) : undefined
+  if (!p || p.isFree) return FREE
+  if (p.direction === 'save') return p.id
+  return p.sourceProjectId ?? FREE
 }
 
-export function fundStatus(d: DB, fundId: ID) {
-  const f = d.funds.find(x => x.id === fundId)!
-  const balance = fundBalance(d, fundId)
-  const target = f.targetMinor ? Math.round(f.targetMinor * (1 + (f.bufferPct ?? 0) / 100)) : undefined
-  const monthsLeft = monthsUntil(f.dueDate)
-  const required = f.monthlyFixedMinor
-    ?? (target ? Math.max(0, Math.ceil((target - balance) / monthsLeft / 100) * 100) : 0)
-  const progress = target ? Math.min(1, balance / target) : 0
-  // Скільки мало б бути зібрано на цей момент.
-  // Початок накопичення беремо з ПЕРШОГО внеску, а не вигадуємо.
-  // У Fund немає дати старту, і раніше тут припускалося, що фонд почали рівно
-  // 12 місяців тому — через що щойно створений фонд одразу отримував «відстаємо».
-  const mine = d.entries.filter(e => e.fundId === fundId)
-  // Початок ПОТОЧНОГО циклу: остання виплата, а якщо виплат ще не було —
-  // найперший внесок. Інакше після виплати цикл міряється від внеску
-  // дворічної давнини, і щойно спорожнілий фонд одразу «відстає».
-  const lastOut = mine.filter(e => e.kind === 'fund_out').map(e => e.occurredOn).sort().pop()
-  const firstIn = mine.filter(e => e.kind === 'fund_in').map(e => e.occurredOn).sort()[0]
-  const cycleStart = lastOut ?? firstIn
-  const span = cycleStart && f.dueDate ? monthsUntil(f.dueDate, cycleStart) : 0
-  const elapsed = span > 0 ? Math.max(0, Math.min(1, 1 - (monthsLeft - 1) / span)) : 0
-  // ще жодного внеску → нічого не почалось, докоряти нема за що
-  const onTrack = !target || balance >= target * elapsed
-  return { fund: f, balance, target, monthsLeft, required, progress, onTrack }
-}
-
-/** Конверт, до якого належать виплати боргів. Похідний: у Debt немає посилання на конверт. */
-export function debtEnvelopeId(d: DB): ID | undefined {
-  return d.envelopes.find(e => e.kind === 'debt' && !e.archived)?.id
-}
-
-export function debtStatus(d: DB, debtId: ID) {
-  const debt = d.debts.find(x => x.id === debtId)!
-  const paid = d.entries
-    .filter(e => e.debtId === debtId && e.kind === 'debt_payment')
-    .reduce((s, e) => s + e.amountMinor, 0)
-  const remaining = Math.max(0, debt.principalMinor - paid)
-  const progress = debt.principalMinor ? paid / debt.principalMinor : 0
-  let payoff: string | undefined
-  if (debt.monthlyPaymentMinor && remaining > 0) {
-    const months = Math.ceil(remaining / debt.monthlyPaymentMinor)
-    const dt = new Date(); dt.setMonth(dt.getMonth() + months)
-    payoff = iso(dt)
+/** Зміна балансу кишень від одного запису, у базовій валюті. */
+function pocketMoves(d: DB, e: DB['entries'][number]): [string, number][] {
+  const v = e.amountBaseMinor
+  switch (e.kind) {
+    case 'income': return [[pocketOf(d, e.projectId), v]]
+    case 'expense':
+    case 'repay': return [[pocketOf(d, e.projectId), -v]]
+    case 'transfer': return [[endOf(d, e.fromProjectId), -v], [endOf(d, e.projectId), v]]
   }
-  return { debt, paid, remaining, progress, payoff }
+}
+
+/** Кінець переказу: грошей можна покласти лише в накопичення, решта — вільні. */
+function endOf(d: DB, projectId: ID | undefined): string {
+  const p = projectId ? d.projects.find(x => x.id === projectId) : undefined
+  return p && p.direction === 'save' && !p.isFree ? p.id : FREE
+}
+
+function pocketBalances(d: DB): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const e of d.entries) {
+    for (const [k, v] of pocketMoves(d, e)) m.set(k, (m.get(k) ?? 0) + v)
+  }
+  return m
+}
+
+/** Кінець переказу: id накопичення або `null` — «Вільні гроші». */
+export function transferEnd(d: DB, projectId: ID | undefined): ID | null {
+  const end = endOf(d, projectId)
+  return end === FREE ? null : end
+}
+
+/**
+ * Рух вільних грошей: надходження, відкладання й витрати без проєкту.
+ * Витрати spend-проєктів теж беруться з вільних, але їхнє місце — у своїх
+ * проєктах: інакше тут була б уся історія родини.
+ */
+export function freeEntries(d: DB) {
+  const freeId = freeProject(d)?.id
+  return d.entries.filter(e => {
+    if (e.kind === 'transfer') return endOf(d, e.fromProjectId) === FREE || endOf(d, e.projectId) === FREE
+    if (e.kind === 'income') return pocketOf(d, e.projectId) === FREE
+    return !e.projectId || e.projectId === freeId
+  }).sort((a, b) => b.occurredOn.localeCompare(a.occurredOn))
+}
+
+/** Скільки нікому не обіцяно просто зараз — баланс «Вільних грошей». */
+export function freeBalance(d: DB): number {
+  return pocketBalances(d).get(FREE) ?? 0
 }
 
 /** Сума підтвердження кожного оплаченого платежу в базовій валюті, із замороженим курсом. */
 export function paidBaseByOccurrence(d: DB): Map<ID, number> {
   const m = new Map<ID, number>()
-  for (const e of d.entries) {
-    // fund_out — парний запис до того самого платежу, не друга оплата
-    if (e.occurrenceId && e.kind !== 'fund_out') m.set(e.occurrenceId, e.amountBaseMinor)
-  }
+  for (const e of d.entries) if (e.occurrenceId) m.set(e.occurrenceId, e.amountBaseMinor)
   return m
 }
 
-export function monthSummary(d: DB, month: string) {
+/** Записи, що належать проєкту: витрати, погашення, надходження й перекази в нього або з нього. */
+export function projectEntries(d: DB, projectId: ID) {
+  return d.entries
+    .filter(e => e.projectId === projectId || e.fromProjectId === projectId)
+    .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn))
+}
+
+export interface ProjectState {
+  project: Project
+  /** save: скільки лежить у проєкті (у валюті проєкту) */
+  balance: number
+  /** spend: витрачено за місяць; repay: сплачено за місяць; save: внесено за місяць */
+  monthActual: number
+  /** ще відкриті платежі проєкту в цьому місяці */
+  monthOpen: number
+  /** spend: витрачено за весь час */
+  totalSpent: number
+  /** save: ціль із запасом · spend: бюджет на весь час · repay: тіло */
+  target?: number
+  /** repay: скільки лишилось віддати */
+  remaining?: number
+  /** save/repay: скільки треба на місяць */
+  required: number
+  /** save: скільки ще відкласти цього місяця */
+  toSetAside: number
+  monthsLeft?: number
+  /** 0..1 */
+  progress: number
+  /** save: чи встигаємо до дати; repay: чи закриємо до бажаної дати */
+  onTrack: boolean
+  /** repay: коли закриємо за такого платежу */
+  payoff?: string
+}
+
+/**
+ * Стан проєкту за місяць. Суми — у валюті проєкту для save/repay (баланс
+ * фонду й залишок боргу не переоцінюються записом), у базовій для spend.
+ */
+export function projectStatus(d: DB, projectId: ID, month = monthKey(today())): ProjectState {
+  const p = d.projects.find(x => x.id === projectId)!
+  const inMonth = (on: string) => monthKey(on) === month
+
+  let balance = 0, monthActual = 0, totalSpent = 0, paid = 0
+  for (const e of d.entries) {
+    const mine = e.projectId === projectId
+    const out = e.fromProjectId === projectId
+    if (!mine && !out) continue
+    const own = e.currency === p.currency ? e.amountMinor : Math.round(e.amountBaseMinor / (p.currency === 'UAH' ? 1 : d.rates[p.currency]))
+    if (p.direction === 'save') {
+      if (e.kind === 'transfer' && mine) { balance += own; if (inMonth(e.occurredOn)) monthActual += own }
+      else if (e.kind === 'transfer' && out) balance -= own
+      else if (e.kind === 'income' && mine) balance += own
+      else if ((e.kind === 'expense' || e.kind === 'repay') && mine) balance -= own
+    } else if (p.direction === 'repay') {
+      if (e.kind === 'repay' && mine) { paid += own; if (inMonth(e.occurredOn)) monthActual += own }
+    } else if (mine && (e.kind === 'expense' || e.kind === 'repay')) {
+      totalSpent += e.amountBaseMinor
+      if (inMonth(e.occurredOn)) monthActual += e.amountBaseMinor
+    }
+  }
+
+  const monthOpen = d.occurrences
+    .filter(o => o.projectId === projectId && monthKey(o.dueDate) === month
+      && (o.status === 'due' || o.status === 'projected'))
+    .reduce((s, o) => s + (p.direction === 'spend'
+      ? toBase(o.expectedMinor, o.currency, d.rates) : o.expectedMinor), 0)
+
+  const monthsLeft = p.endsOn ? monthsUntil(p.endsOn) : undefined
+  let target: number | undefined
+  let remaining: number | undefined
+  let required = 0, progress = 0, onTrack = true
+  let payoff: string | undefined
+
+  if (p.direction === 'save') {
+    target = p.targetMinor ? Math.round(p.targetMinor * (1 + (p.bufferPct ?? 0) / 100)) : undefined
+    // Від балансу на ПОЧАТОК місяця: інакше внесок цього місяця зменшував би
+    // саму норму, і після внеску рядок показував би «внесено 978 з 870».
+    const balanceAtStart = balance - monthActual
+    required = p.monthlyMinor
+      ?? (target ? Math.max(0, Math.ceil((target - balanceAtStart) / (monthsLeft ?? 1) / 100) * 100) : 0)
+    progress = target ? Math.min(1, Math.max(0, balance / target)) : 0
+    // Темп міряємо від початку ПОТОЧНОГО циклу: остання витрата з накопичення,
+    // а якщо витрат не було — перший внесок. Інакше щойно спорожнілий після
+    // виплати проєкт одразу «відстає» від внесків дворічної давнини.
+    const mine = d.entries.filter(e => e.projectId === projectId || e.fromProjectId === projectId)
+    const lastOut = mine.filter(e => e.kind === 'expense' || e.fromProjectId === projectId)
+      .map(e => e.occurredOn).sort().pop()
+    const firstIn = mine.filter(e => e.kind === 'transfer' && e.projectId === projectId)
+      .map(e => e.occurredOn).sort()[0]
+    const cycleStart = lastOut ?? firstIn ?? p.startsOn
+    const span = cycleStart && p.endsOn ? monthsUntil(p.endsOn, cycleStart) : 0
+    const elapsed = span > 0 && monthsLeft ? Math.max(0, Math.min(1, 1 - (monthsLeft - 1) / span)) : 0
+    // ще жодного внеску → нічого не почалось, докоряти нема за що
+    onTrack = !target || balance >= target * elapsed
+  } else if (p.direction === 'repay') {
+    target = p.targetMinor
+    remaining = Math.max(0, (p.targetMinor ?? 0) - paid)
+    required = p.monthlyMinor ?? (remaining && monthsLeft ? Math.ceil(remaining / monthsLeft / 100) * 100 : 0)
+    progress = p.targetMinor ? Math.min(1, paid / p.targetMinor) : 0
+    if (p.monthlyMinor && remaining > 0) {
+      const dt = parse(today()); dt.setMonth(dt.getMonth() + Math.ceil(remaining / p.monthlyMinor))
+      payoff = iso(dt)
+    }
+    onTrack = !p.endsOn || !payoff || payoff <= p.endsOn
+  } else if (p.direction === 'spend') {
+    target = p.targetMinor
+    // факт spend-проєкту в базовій валюті — орієнтир зводимо туди ж
+    const whole = !!p.targetMinor && !p.monthlyMinor
+    const guide = toBase((whole ? p.targetMinor : p.monthlyMinor) ?? 0, p.currency, d.rates)
+    progress = guide ? (whole ? totalSpent : monthActual) / guide : 0
+  }
+
+  const toSetAside = p.direction === 'save' ? Math.max(0, required - monthActual) : 0
+  return { project: p, balance, monthActual, monthOpen, totalSpent, target, remaining, required, toSetAside, monthsLeft, progress, onTrack, payoff }
+}
+
+/** Платіж правила-надходження (зарплата): «Отримано», а не «Оплачено». */
+export function isIncomeOccurrence(d: DB, o: Occurrence): boolean {
+  if (!o.planId) return false
+  return d.recurringPlans.find(p => p.id === o.planId)?.flow === 'in'
+}
+
+/**
+ * Місяць — агрегатор, не сутність: що мало й має статися з усіма проєктами.
+ * Усі суми в базовій валюті.
+ */
+export function monthView(d: DB, month: string) {
+  const t = today()
+  const current = monthKey(t)
+  const live = d.projects.filter(p => p.status === 'active' && !p.isFree)
+  const states = live.map(p => projectStatus(d, p.id, month))
+  const base = (minor: number, c: Currency) => toBase(minor, c, d.rates)
+
   const income = d.entries
     .filter(e => e.kind === 'income' && monthKey(e.occurredOn) === month)
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
-  // Очікуване зводимо до базової валюти за СЬОГОДНІШНІМ курсом: у платежа,
-  // якого ще не було, замороженого курсу немає й бути не може. Записи —
-  // інша річ, вони несуть amountBaseMinor із моменту створення.
-  const base = (minor: number, c: Currency) => toBase(minor, c, d.rates)
-
-  const incomeEnvelopes = new Set(d.envelopes.filter(e => e.kind === 'income').map(e => e.id))
-  // платіж у дохідний конверт — це надходження, а не зобовʼязання:
-  // віднімати його від «вільно» означало б рахувати зарплату витратою
-  const monthOccurrences = d.occurrences
-    .filter(o => monthKey(o.dueDate) === month && !incomeEnvelopes.has(o.envelopeId))
-
-  /** Очікувані, ще не підтверджені надходження цього місяця. */
-  const incomeExpected = d.occurrences
-    .filter(o => monthKey(o.dueDate) === month && incomeEnvelopes.has(o.envelopeId)
-      && (o.status === 'due' || o.status === 'projected'))
+  const occ = d.occurrences.filter(o => monthKey(o.dueDate) === month)
+  const open = occ.filter(o => o.status === 'due' || o.status === 'projected')
+  const incomeExpected = open.filter(o => isIncomeOccurrence(d, o))
+    .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
+  const billsLeft = open.filter(o => !isIncomeOccurrence(d, o))
     .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
 
-  const obligationsLeft = monthOccurrences
-    .filter(o => o.status === 'due' || o.status === 'projected')
-    .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
-
-  // у «вільно» входять і вже оплачені: гроші пішли з рахунку, і рівняння
-  // не має про це забувати, інакше підтвердження платежу ЗБІЛЬШУЄ вільне
-  // Оплачене — це вже факт: беремо суму із запису, заморожену в момент оплати
-  // (інваріант 2). Сьогоднішній курс тут переписав би минулі місяці.
-  const paidBase = paidBaseByOccurrence(d)
-  const obligationsAll = monthOccurrences
-    .filter(o => o.status !== 'skipped')
-    .reduce((s, o) => s + (o.status === 'paid'
-      ? paidBase.get(o.id) ?? base(o.actualMinor ?? o.expectedMinor, o.currency)
-      : base(o.expectedMinor, o.currency)), 0)
-
-  // Фонди з конвертом уже породили платежі й сидять в obligationsAll —
-  // рахувати їх ще й тут означало б відняти двічі. Окремим рядком лишаються
-  // тільки ті, що не автоматизовані.
-  const fundsRequired = d.funds
-    .filter(f => !f.archived && !f.envelopeId)
-    .reduce((s, f) => s + base(fundStatus(d, f.id).required, f.currency), 0)
-
-  const spentVariable = d.entries
-    .filter(e => (e.kind === 'expense' || e.kind === 'debt_payment')
-      && monthKey(e.occurredOn) === month && !e.occurrenceId)
+  const spent = d.entries
+    .filter(e => (e.kind === 'expense' || e.kind === 'repay') && monthKey(e.occurredOn) === month)
+    .reduce((s, e) => s + e.amountBaseMinor, 0)
+  const setAside = d.entries
+    .filter(e => e.kind === 'transfer' && monthKey(e.occurredOn) === month
+      && d.projects.find(p => p.id === e.projectId)?.direction === 'save')
     .reduce((s, e) => s + e.amountBaseMinor, 0)
 
-  const obligationsPaid = obligationsAll - obligationsLeft
-  // Симетрія: зобовʼязання рахуються очікуваними (неоплачені теж віднімаються),
-  // тож і дохід має рахуватись очікуваним. Інакше будь-який майбутній місяць
-  // виглядає катастрофою просто тому, що зарплату ще не підтвердили.
-  const free = income + incomeExpected - obligationsAll - fundsRequired - spentVariable
-  return { income, incomeExpected, obligationsLeft, obligationsPaid, fundsRequired, spentVariable, free }
+  const toSetAside = states
+    .filter(s => s.project.direction === 'save')
+    .reduce((sum, s) => sum + base(s.toSetAside, s.project.currency), 0)
+
+  // Ще очікуються витрати з вільних: для кожного spend/repay без свого
+  // джерела — більше з «орієнтир» і «факт + відкриті платежі», мінус факт.
+  // Відкриті платежі й орієнтир не додаються двічі.
+  const expectedSpend = states
+    .filter(s => (s.project.direction === 'spend' || s.project.direction === 'repay') && !s.project.sourceProjectId)
+    .reduce((sum, s) => {
+      const actual = s.project.direction === 'spend' ? s.monthActual : base(s.monthActual, s.project.currency)
+      const openB = s.project.direction === 'spend' ? s.monthOpen : base(s.monthOpen, s.project.currency)
+      const guide = s.project.direction === 'repay'
+        ? base(s.required, s.project.currency)
+        : s.project.monthlyMinor ?? 0
+      return sum + Math.max(guide, actual + openB) - actual
+    }, 0)
+  // Разові платежі поза проєктами з орієнтиром теж очікуються
+  const looseOpen = open
+    .filter(o => !isIncomeOccurrence(d, o))
+    .filter(o => {
+      const p = d.projects.find(x => x.id === o.projectId)
+      return !p || p.isFree || p.status !== 'active'
+    })
+    .reduce((s, o) => s + base(o.expectedMinor, o.currency), 0)
+
+  const freeNow = freeBalance(d)
+  // Прогноз — лише для поточного місяця: для майбутніх він ігнорував би все,
+  // що ще станеться до них, і показував би впевнену, але вигадану цифру
+  const forecast = month === current
+    ? freeNow + incomeExpected - expectedSpend - looseOpen - toSetAside
+    : undefined
+
+  return {
+    states, income, incomeExpected, billsLeft, spent, setAside, toSetAside,
+    freeNow, forecast,
+    bills: occ.sort((a, b) => {
+      const rank = (x: string) => (x === 'paid' || x === 'skipped' ? 1 : 0)
+      return rank(a.status) - rank(b.status) || a.dueDate.localeCompare(b.dueDate)
+    }),
+  }
 }
 
 /**
@@ -663,7 +781,7 @@ export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[]
     const at = o.updatedAt
     if (!at || at <= since) continue
     fresh.push({
-      id: `paid:${o.id}`, at, to: '/bills',
+      id: `paid:${o.id}`, at, to: '/month',
       text: `Уже оплачено: ${o.name}`,
       detail: name(o.paidBy),
     })
@@ -691,7 +809,7 @@ export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[]
     if (o.assigneeId && o.assigneeId !== me) continue
     if (o.dueDate > soonEdge) continue
     soon.push({
-      id: `bill:${o.id}`, to: '/bills',
+      id: `bill:${o.id}`, to: '/month',
       text: o.name, detail: `${relativeDue(o.dueDate).label} · ${money(o.expectedMinor, o.currency)}`,
     })
   }
@@ -718,55 +836,35 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
     const amt = amountMinor ?? o.expectedMinor
     const on = paidOn ?? today()
     const rate = o.currency === 'UAH' ? 1 : d.rates[o.currency]
+    const plan = d.recurringPlans.find(p => p.id === o.planId)
+    const project = d.projects.find(p => p.id === o.projectId)
 
-    const plan0 = d.recurringPlans.find(p => p.id === o.planId)
+    // Один платіж — один запис. Що він робить із грошима, каже проєкт:
+    // надходження правила-доходу, погашення боргу або витрата. Витрата з
+    // проєкту-накопичення сама зменшує його баланс — пари «витрата + списання
+    // з фонду» більше немає.
+    const kind: EntryKind = plan?.flow === 'in' ? 'income'
+      : project?.direction === 'repay' ? 'repay'
+      : 'expense'
 
-    // Платіж, що гасить борг, — це ОДИН запис debt_payment, який несе і конверт,
-    // і борг. debtStatus читає його як виплату, envelopeMonth — як витрату місяця.
-    // Два окремі записи про одну подію довелось би тримати в синхроні при
-    // кожній правці й видаленні.
-    const entryId = uid()
     d.entries.push({
-      id: entryId,
-      // Конверт уже каже, відтік це чи надходження — окреме поле в плані зайве.
-      // Тип руху грошей визначає те, з чим платіж повʼязаний. Одне правило
-      // на всі випадки: поповнення фонду, гасіння боргу, дохід, витрата.
-      kind: o.fundId ? 'fund_in'
-        : plan0?.debtId ? 'debt_payment'
-        : d.envelopes.find(e => e.id === o.envelopeId)?.kind === 'income' ? 'income'
-        : 'expense',
-      occurredOn: on, amountMinor: amt, currency: o.currency,
+      id: uid(), kind, occurredOn: on, amountMinor: amt, currency: o.currency,
       rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
-      envelopeId: o.envelopeId, debtId: plan0?.debtId, fundId: o.fundId,
-      occurrenceId: o.id, note: o.name, createdBy: d.meId,
+      projectId: o.projectId, occurrenceId: o.id, note: o.name, createdBy: d.meId,
     })
     o.status = 'paid'; o.paidOn = on; o.actualMinor = amt; o.paidBy = d.meId
 
-    // фінансується фондом → списуємо з фонду, а не рахуємо витрату двічі
-    const plan = plan0
-    if (plan?.fundId) {
-      d.entries.push({
-        id: uid(), kind: 'fund_out', occurredOn: on, amountMinor: amt, currency: o.currency,
-        rateToBase: rate, amountBaseMinor: Math.round(amt * rate),
-        fundId: plan.fundId, occurrenceId: o.id, note: o.name, createdBy: d.meId,
-      })
-
-      // Фонд відпрацював цикл — переносимо ціль на наступний платіж цього плану.
-      // Без цього страховка, оплачена в лютому, назавжди лишає фонду лютневу
-      // дату: monthsUntil затискається в 1, і фонд щомісяця вимагає весь
-      // залишок цілі, а «відстаємо» не згасає ніколи.
-      const fund = d.funds.find(x => x.id === plan.fundId)
-      if (fund?.dueDate) {
-        // Рахуємо з РОЗКЛАДУ, а не з уже згенерованих платежів: горизонт
-        // генерації 13 місяців, тож у річного плану наступної дати там
-        // просто немає — а саме річні фонди це й стосується найбільше.
-        const next = expandDates(
-          plan.freq, plan.byMonthDay, plan.byDay, plan.byMonth, plan.anchorDate,
-          addDays(o.dueDate, 1), addDays(o.dueDate, 400),
-        )[0]
-        if (next) fund.dueDate = next
-      }
+    // Регулярна виплата з накопичення (страховка раз на рік) завершила цикл —
+    // дата цілі переїжджає на наступний такий платіж. Інакше після лютого
+    // проєкт назавжди лишається з лютневою датою й вимагає весь залишок щомісяця.
+    if (plan && project?.direction === 'save' && project.endsOn && kind === 'expense') {
+      const next = expandDates(
+        plan.freq, plan.byMonthDay, plan.byDay, plan.byMonth, plan.anchorDate,
+        addDays(o.dueDate, 1), addDays(o.dueDate, 400),
+      )[0]
+      if (next) project.endsOn = next
     }
+
     // змінна сума → наступне очікування = медіана останніх шести
     if (plan?.amountMode === 'variable') {
       const past = d.occurrences
@@ -782,11 +880,6 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
   return true
 }
 
-/** Платіж у дохідний конверт — це надходження: «Отримано», а не «Оплачено». */
-export function isIncomeOccurrence(d: DB, o: Occurrence): boolean {
-  return d.envelopes.find(e => e.id === o.envelopeId)?.kind === 'income'
-}
-
 export function skipOccurrence(id: ID) {
   mutate(d => {
     const o = d.occurrences.find(x => x.id === id)
@@ -794,28 +887,26 @@ export function skipOccurrence(id: ID) {
   })
 }
 
+/**
+ * Записати рух грошей. `projectId` порожній — «Вільні гроші»; для переказу
+ * `fromProjectId` порожній — теж вільні.
+ */
 export function addEntry(input: {
   kind: EntryKind; amountMinor: number; currency: Currency
-  envelopeId?: ID; fundId?: ID; debtId?: ID; note?: string; occurredOn?: string
-}) {
+  projectId?: ID; fromProjectId?: ID; note?: string; occurredOn?: string
+}): ID {
+  const id = uid()
   mutate(d => {
     const rate = input.currency === 'UAH' ? 1 : d.rates[input.currency]
     d.entries.push({
-      id: uid(), kind: input.kind, occurredOn: input.occurredOn ?? today(),
+      id, kind: input.kind, occurredOn: input.occurredOn ?? today(),
       amountMinor: input.amountMinor, currency: input.currency,
-      rateToBase: rate, amountBaseMinor: toBase(input.amountMinor, input.currency, d.rates),
-      envelopeId: input.envelopeId, fundId: input.fundId, debtId: input.debtId,
+      rateToBase: rate, amountBaseMinor: Math.round(input.amountMinor * rate),
+      projectId: input.projectId, fromProjectId: input.fromProjectId,
       note: input.note, createdBy: d.meId,
     })
   })
-}
-
-export function setPlanned(envelopeId: ID, month: string, plannedMinor: number) {
-  mutate(d => {
-    const line = d.planLines.find(p => p.envelopeId === envelopeId && p.month === month)
-    if (line) line.plannedMinor = plannedMinor
-    else d.planLines.push({ envelopeId, month, plannedMinor })
-  })
+  return id
 }
 
 export function addTask(input: Partial<Task> & { title: string }) {
@@ -825,6 +916,7 @@ export function addTask(input: Partial<Task> & { title: string }) {
       id, title: input.title, status: input.status ?? 'todo',
       priority: input.priority ?? 0, effort: input.effort ?? 1,
       assigneeId: input.assigneeId, area: input.area, dueDate: input.dueDate,
+      projectId: input.projectId, notes: input.notes,
       createdBy: d.meId, createdAt: new Date().toISOString(),
     })
   })
@@ -905,13 +997,13 @@ export function removeShoppingItem(id: ID) {
 }
 
 /** Один чек → одна витрата. Ціна кожного товару не питається ніколи. */
-export function finishShopping(totalMinor: number, envelopeId: ID, store?: string) {
+export function finishShopping(totalMinor: number, projectId: ID | undefined, store?: string) {
   mutate(d => {
     const tripId = uid()
-    d.trips.push({ id: tripId, store, shoppedBy: d.meId, completedAt: new Date().toISOString(), totalMinor, currency: 'UAH' })
+    d.trips.push({ id: tripId, store, shoppedBy: d.meId, completedAt: new Date().toISOString(), totalMinor, currency: 'UAH', projectId })
     d.entries.push({
       id: uid(), kind: 'expense', occurredOn: today(), amountMinor: totalMinor, currency: 'UAH',
-      rateToBase: 1, amountBaseMinor: totalMinor, envelopeId, tripId,
+      rateToBase: 1, amountBaseMinor: totalMinor, projectId, tripId,
       note: store || 'Покупки', createdBy: d.meId,
     })
     // Не видаляємо, а привʼязуємо до походу — так само, як finish_shopping у sql/.
@@ -944,26 +1036,64 @@ export function setRates(patch: Partial<Rates>) {
   mutate(d => { Object.assign(d.rates, patch) })
 }
 
-/* ═══════════════════ конверти ═══════════════════ */
+/* ═══════════════════ проєкти ═══════════════════ */
 
-export function addEnvelope(input: { name: string; kind: EnvelopeKind; ownerId?: ID }) {
+export function addProject(input: Omit<Project, 'id' | 'sortOrder' | 'status'> & { status?: ProjectStatus; sortOrder?: number }): ID {
+  const id = uid()
   mutate(d => {
-    const sortOrder = Math.max(0, ...d.envelopes.map(e => e.sortOrder)) + 10
-    d.envelopes.push({ id: uid(), name: input.name, kind: input.kind, ownerId: input.ownerId, sortOrder })
+    const sortOrder = input.sortOrder ?? Math.max(0, ...d.projects.map(p => p.sortOrder)) + 10
+    d.projects.push({ ...input, id, status: input.status ?? 'active', sortOrder, isFree: undefined })
+  })
+  return id
+}
+
+export function updateProject(id: ID, patch: Partial<Omit<Project, 'id' | 'isFree'>>) {
+  mutate(d => {
+    const p = d.projects.find(x => x.id === id)
+    if (!p) return
+    Object.assign(p, patch)
+    // «Вільні гроші» лишаються системними: напрям і статус не міняються
+    if (p.isFree) { p.direction = 'none'; p.status = 'active' }
   })
 }
 
-export function updateEnvelope(id: ID, patch: Partial<Envelope>) {
-  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) Object.assign(e, patch) })
+/**
+ * Завершити, архівувати або повернути проєкт. Проєкти не видаляються:
+ * на них посилаються записи за минуле. Майбутні неоплачені платежі
+ * неактивного проєкту прибираються, правила вимикаються — історія лишається.
+ */
+export function setProjectStatus(id: ID, status: ProjectStatus) {
+  mutate(d => {
+    const p = d.projects.find(x => x.id === id)
+    if (!p || p.isFree) return
+    p.status = status
+    if (status === 'active') return
+    const t = today()
+    for (const r of d.recurringPlans) if (r.projectId === id) r.active = false
+    d.occurrences = d.occurrences.filter(o =>
+      o.projectId !== id || o.status === 'paid' || o.status === 'skipped' || o.dueDate < t)
+  })
 }
 
-/** Конверт не видаляємо — на нього дивляться історичні записи. Архівуємо. */
-export function archiveEnvelope(id: ID, archived = true) {
-  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) e.archived = archived })
+export function reorderProject(id: ID, sortOrder: number) {
+  updateProject(id, { sortOrder })
 }
 
-export function reorderEnvelope(id: ID, sortOrder: number) {
-  mutate(d => { const e = d.envelopes.find(x => x.id === id); if (e) e.sortOrder = sortOrder })
+/** Поповнити накопичення: переказ із вільних (або з іншого накопичення). Не витрата. */
+export function fundProject(projectId: ID, amountMinor: number, fromProjectId?: ID, note?: string): ID | undefined {
+  const p = db.projects.find(x => x.id === projectId)
+  if (!p || amountMinor <= 0) return undefined
+  return addEntry({ kind: 'transfer', amountMinor, currency: p.currency, projectId, fromProjectId, note })
+}
+
+/** Витрата на проєкт: для накопичення зменшує його баланс, для решти — з вільних або джерела. */
+export function spendOnProject(projectId: ID | undefined, amountMinor: number, note?: string, currency?: Currency): ID | undefined {
+  const p = projectId ? db.projects.find(x => x.id === projectId) : undefined
+  if (amountMinor <= 0) return undefined
+  return addEntry({
+    kind: p?.direction === 'repay' ? 'repay' : 'expense',
+    amountMinor, currency: currency ?? p?.currency ?? 'UAH', projectId, note,
+  })
 }
 
 /* ═══════════════════ регулярні платежі ═══════════════════ */
@@ -997,82 +1127,6 @@ export function removeRecurringPlan(id: ID) {
   })
 }
 
-/* ═══════════════════ фонди ═══════════════════ */
-
-export function addFund(input: Omit<Fund, 'id' | 'priority'> & { priority?: number }) {
-  mutate(d => {
-    const priority = input.priority ?? Math.max(0, ...d.funds.map(f => f.priority)) + 10
-    d.funds.push({ ...input, priority, id: uid() })
-  })
-}
-
-export function updateFund(id: ID, patch: Partial<Fund>) {
-  mutate(d => {
-    const f = d.funds.find(x => x.id === id)
-    if (!f) return
-    // Нагадування переїхало в інший конверт або вимкнулось: старі згенеровані
-    // внески треба прибрати, інакше вони висять у чужому конверті назавжди.
-    // Оплачене не чіпаємо — це вже факт.
-    const moved = ('envelopeId' in patch && patch.envelopeId !== f.envelopeId)
-      || ('contributionDay' in patch && patch.contributionDay !== f.contributionDay)
-    Object.assign(f, patch)
-    if (moved) dropFutureFundOccurrences(d, id)
-  })
-}
-
-export function archiveFund(id: ID, archived = true) {
-  mutate(d => {
-    const f = d.funds.find(x => x.id === id)
-    if (!f) return
-    f.archived = archived
-    if (archived) dropFutureFundOccurrences(d, id)
-  })
-}
-
-/**
- * Прибираємо непідтверджені внески фонду — і майбутні, і прострочені.
- *
- * На відміну від рахунка, прострочений внесок у фонд не є боргом перед кимось:
- * якщо нагадування вимкнули, тримати його в чеклісті немає сенсу. Оплачене
- * й пропущене лишається — це вже історія.
- */
-function dropFutureFundOccurrences(d: DB, fundId: ID) {
-  d.occurrences = d.occurrences.filter(o =>
-    o.fundId !== fundId || o.status === 'paid' || o.status === 'skipped')
-}
-
-/** Витрата з фонду напряму (не через прив'язаний регулярний платіж). */
-export function spendFromFund(fundId: ID, amountMinor: number, note?: string) {
-  mutate(d => {
-    const f = d.funds.find(x => x.id === fundId)
-    if (!f) return
-    const rate = f.currency === 'UAH' ? 1 : d.rates[f.currency]
-    d.entries.push({
-      id: uid(), kind: 'fund_out', occurredOn: today(), amountMinor, currency: f.currency,
-      rateToBase: rate, amountBaseMinor: Math.round(amountMinor * rate),
-      fundId, note, createdBy: d.meId,
-    })
-  })
-}
-
-/* ═══════════════════ борги ═══════════════════ */
-
-export function addDebt(input: Omit<Debt, 'id' | 'openedOn'> & { openedOn?: string }) {
-  mutate(d => { d.debts.push({ ...input, openedOn: input.openedOn ?? today(), id: uid() }) })
-}
-
-export function updateDebt(id: ID, patch: Partial<Debt>) {
-  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) Object.assign(x, patch) })
-}
-
-export function closeDebt(id: ID, closedOn?: string) {
-  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) x.closedOn = closedOn ?? today() })
-}
-
-export function reopenDebt(id: ID) {
-  mutate(d => { const x = d.debts.find(y => y.id === id); if (x) x.closedOn = undefined })
-}
-
 /* ═══════════════════ шаблони побутових задач ═══════════════════ */
 
 export function addTaskTemplate(input: Omit<TaskTemplate, 'id'>) {
@@ -1095,7 +1149,7 @@ export function removeTaskTemplate(id: ID) {
 
 /** Сума/валюта змінились → курс перезаморожуємо на СЬОГОДНІ, решта полів як є. */
 export function updateEntry(id: ID, patch: Partial<{
-  amountMinor: number; currency: Currency; envelopeId: ID; note: string; occurredOn: string
+  amountMinor: number; currency: Currency; projectId: ID | undefined; note: string; occurredOn: string
 }>) {
   mutate(d => {
     const e = d.entries.find(x => x.id === id)
@@ -1108,19 +1162,17 @@ export function updateEntry(id: ID, patch: Partial<{
     if (patch.amountMinor != null || currencyChanged) {
       e.amountBaseMinor = Math.round(e.amountMinor * e.rateToBase)
     }
-    // Запис підтверджує платіж → факт платежу й парне списання з фонду
-    // йдуть за ним. Інакше витрата змінилась, а фонд списав стару суму.
-    if (e.occurrenceId && e.kind !== 'fund_out') {
+    // Витрата на погашення боргу й навпаки: вид іде за проєктом
+    if ('projectId' in patch && (e.kind === 'expense' || e.kind === 'repay')) {
+      const p = d.projects.find(x => x.id === e.projectId)
+      e.kind = p?.direction === 'repay' ? 'repay' : 'expense'
+    }
+    // Запис підтверджує платіж → факт платежу йде за ним
+    if (e.occurrenceId) {
       const o = d.occurrences.find(x => x.id === e.occurrenceId)
       if (o) {
         o.actualMinor = e.amountMinor
         if (patch.occurredOn) o.paidOn = patch.occurredOn
-      }
-      for (const pair of d.entries) {
-        if (pair.occurrenceId !== e.occurrenceId || pair.kind !== 'fund_out') continue
-        pair.amountMinor = e.amountMinor; pair.currency = e.currency
-        pair.rateToBase = e.rateToBase; pair.amountBaseMinor = e.amountBaseMinor
-        if (patch.occurredOn) pair.occurredOn = patch.occurredOn
       }
     }
   })
@@ -1133,7 +1185,7 @@ export function removeEntry(id: ID) {
     if (!e) return
     if (e.occurrenceId) {
       const oid = e.occurrenceId
-      d.entries = d.entries.filter(x => x.occurrenceId !== oid)   // разом із fund_out
+      d.entries = d.entries.filter(x => x.occurrenceId !== oid)
       const o = d.occurrences.find(x => x.id === oid)
       if (o) {
         o.status = o.dueDate <= today() ? 'due' : 'projected'
@@ -1149,12 +1201,12 @@ export function removeEntry(id: ID) {
 
 /** Разовий платіж без регулярного плану. */
 export function addOccurrence(input: {
-  envelopeId: ID; name: string; dueDate: string; expectedMinor: number
+  projectId: ID; name: string; dueDate: string; expectedMinor: number
   currency?: Currency; assigneeId?: ID; note?: string
 }) {
   mutate(d => {
     d.occurrences.push({
-      id: uid(), envelopeId: input.envelopeId, name: input.name, dueDate: input.dueDate,
+      id: uid(), projectId: input.projectId, name: input.name, dueDate: input.dueDate,
       expectedMinor: input.expectedMinor, currency: input.currency ?? 'UAH',
       status: input.dueDate <= today() ? 'due' : 'projected',
       assigneeId: input.assigneeId, note: input.note,

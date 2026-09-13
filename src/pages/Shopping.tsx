@@ -8,7 +8,8 @@ import {
   useDB, addShoppingItem, updateShoppingItem, toggleShoppingItem,
   removeShoppingItem, finishShopping,
 } from '../data/store'
-import type { DB, ShoppingItem } from '../data/types'
+import type { DB, Project, ShoppingItem } from '../data/types'
+import { payableProjects } from '../components/RuleForm'
 import { money } from '../lib/money'
 import { shortDate } from '../lib/dates'
 
@@ -217,6 +218,7 @@ function PastTrips() {
             const by = db.members.find(m => m.id === t.shoppedBy)
             // кількість позицій тепер похідна — товари привʼязані до походу, а не видалені
             const n = db.shoppingItems.filter(i => i.tripId === t.id).length
+            const project = t.projectId ? db.projects.find(p => p.id === t.projectId) : undefined
             return (
               <ListRow key={t.id}>
                 <span className="shrink-0 text-[13px] text-faint num w-[52px]">
@@ -225,6 +227,7 @@ function PastTrips() {
                 <span className="flex-1 min-w-0 text-[14px] truncate">
                   {t.store || <span className="text-faint">Без магазину</span>}
                   {n > 0 && <span className="text-faint text-[12.5px] num"> · {n} поз.</span>}
+                  {project && <span className="text-faint text-[12.5px]"> · {project.name}</span>}
                 </span>
                 <span className="text-[14px] num">{money(t.totalMinor, t.currency)}</span>
                 <Avatar member={by} size={18} />
@@ -238,24 +241,23 @@ function PastTrips() {
 }
 
 /**
- * Конверт для походу за замовчуванням — рахується на читанні, без зашитої назви:
- * у кожного дому конверти звуться по-своєму, а в новому їх може ще не бути.
- * Куди раніше записували походи → перший змінний → перший будь-який витратний.
+ * Проєкт для походу за замовчуванням — рахується на читанні, без зашитої назви
+ * як єдиної опори: у кожного дому проєкти звуться по-своєму, а в новому їх може
+ * ще не бути. Куди раніше записували походи → «Продукти…» → перший «витрачати».
  */
-function defaultTripEnvelope(db: DB): string | undefined {
-  const usable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
-  const ids = new Set(usable.map(e => e.id))
+function defaultTripProject(db: DB, usable: Project[]): string | undefined {
+  const ids = new Set(usable.map(p => p.id))
   const counts = new Map<string, number>()
-  for (const e of db.entries) {
-    if (!e.tripId || !e.envelopeId || !ids.has(e.envelopeId)) continue
-    counts.set(e.envelopeId, (counts.get(e.envelopeId) ?? 0) + 1)
+  for (const t of db.trips) {
+    if (!t.projectId || !ids.has(t.projectId)) continue
+    counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1)
   }
   let best: string | undefined
   for (const [id, n] of counts) if (!best || n > counts.get(best)!) best = id
+  const spend = usable.filter(p => p.direction === 'spend')
   return best
-    ?? usable.find(e => e.kind === 'variable')?.id
-    ?? usable[0]?.id
-    ?? db.envelopes.find(e => e.kind !== 'income')?.id
+    ?? spend.find(p => p.name.toLocaleLowerCase('uk').includes('продукт'))?.id
+    ?? spend[0]?.id
 }
 
 function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -264,20 +266,24 @@ function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [store, setStore] = useState('')
   const [minor, setMinor] = useState(0)
   // Вибір людини тримаємо окремо від замовчування: дані можуть приїхати вже після
-  // монтування, а вибраний раніше конверт — зникнути. Тоді беремо замовчування.
-  const [picked, setPicked] = useState('')
-  const fallback = defaultTripEnvelope(db)
-  const spendable = db.envelopes.filter(e => e.kind !== 'income' && (!e.archived || e.id === picked || e.id === fallback))
-  const envelopeId = spendable.some(e => e.id === picked) ? picked : fallback
+  // монтування, а вибраний раніше проєкт — завершитись. Тоді беремо замовчування.
+  // null — ще не вибирали; '' — свідомо «без проєкту».
+  const [picked, setPicked] = useState<string | null>(null)
+  const spendable = payableProjects(db).filter(p => p.direction !== 'none')
+  const fallback = defaultTripProject(db, spendable)
+  const projectId = picked === '' ? ''
+    : picked && spendable.some(p => p.id === picked) ? picked : fallback ?? ''
 
   const save = () => {
-    if (!minor || !envelopeId) return
+    if (!minor) return
     const n = db.shoppingItems.filter(i => i.checkedAt && !i.tripId).length
-    finishShopping(minor, envelopeId, store.trim() || undefined)
-    toast(`Похід записано: ${money(minor)} · ${n} поз.`)
+    const project = spendable.find(p => p.id === projectId)
+    // без проєкту витрата лягає у «Вільні гроші» — це допустимо
+    finishShopping(minor, projectId || undefined, store.trim() || undefined)
+    toast(`Похід записано: ${money(minor)} · ${n} поз.${project ? ' · ' + project.name : ''}`)
     setStore('')
     setMinor(0)
-    setPicked('')
+    setPicked(null)
     onClose()
   }
 
@@ -292,22 +298,22 @@ function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
       <Field label="Магазин" htmlFor="trip-store" hint="Необовʼязково">
         <Input id="trip-store" value={store} onChange={setStore} placeholder="—" />
       </Field>
-      {envelopeId ? (
-        <Field label="Конверт" htmlFor="trip-env">
-          <Select id="trip-env" value={envelopeId} onChange={setPicked}
-            options={spendable.map(e => ({ value: e.id, label: e.name }))} />
+      {spendable.length ? (
+        <Field label="Проєкт" htmlFor="trip-project">
+          <Select id="trip-project" value={projectId} onChange={setPicked} placeholder="Без проєкту"
+            options={spendable.map(p => ({ value: p.id, label: p.name }))} />
         </Field>
       ) : (
         <div className="mb-3 rounded-lg bg-surface2 px-3 py-2.5 text-[13px] text-muted leading-snug">
-          <p>Похід записується витратою в конверт, а конвертів витрат ще немає.</p>
+          <p>Похід запишеться у «Вільні гроші». Щоб бачити, скільки йде на продукти, заведіть проєкт витрат.</p>
           <div className="mt-2">
-            <Btn onClick={() => { onClose(); navigate('/envelopes?env=new') }}>
-              {Icon.plus(16)} Завести конверт
+            <Btn onClick={() => { onClose(); navigate('/projects') }}>
+              Відкрити проєкти
             </Btn>
           </div>
         </div>
       )}
-      <Btn variant="primary" full disabled={!minor || !envelopeId} onClick={save}>Записати витрату</Btn>
+      <Btn variant="primary" full disabled={!minor} onClick={save}>Записати витрату</Btn>
     </Sheet>
   )
 }

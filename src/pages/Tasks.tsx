@@ -1,18 +1,19 @@
 import { useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Avatar, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
   Icon, Input, LinkChip, OptionalFields, Pill, PriorityMark, Segmented, Select, Sheet, Switch, Tabs,
-  Textarea, priorityLabel, Rows, PropertyMenu, type MenuOption,
+  Textarea, priorityLabel, Rows, PropertyMenu, useSheet, type MenuOption,
 } from '../ui'
 import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
-  fairness, skipOccurrence, shoppingPending,
+  fairness, skipOccurrence, shoppingPending, isIncomeOccurrence,
   addTaskTemplate, updateTaskTemplate, removeTaskTemplate,
 } from '../data/store'
 import { AmountForm, BillRow, doneLabel, payBill } from '../components/BillRow'
-import { envelopeRoute, fundRoute, ruleRoute, ruleText } from '../data/links'
-import type { DB, ID, Occurrence, Priority, Task, TaskStatus, TaskTemplate } from '../data/types'
+import { payableProjects } from '../components/RuleForm'
+import { monthRoute, projectRoute, ruleRoute, ruleText } from '../data/links'
+import type { DB, ID, Occurrence, Priority, Project, Task, TaskStatus, TaskTemplate } from '../data/types'
 import { money } from '../lib/money'
 import { addDays, relativeDue, shortDate, thisMonth, today } from '../lib/dates'
 import { readPinShopping, writePinShopping } from '../lib/prefs'
@@ -45,7 +46,7 @@ type Item =
  * (TASK_HORIZON_DAYS) і стільки ж показує relativeDue() як «через N дн.»,
  * далі вона вже друкує голу дату — тобто це межа, до якої дата ще відчувається
  * як «скоро». «Всі» піднімає стелю до 31 дня: це рівно та довжина, за якою
- * стоїть окремий екран «Платежі» з повним чеклістом місяця.
+ * стоїть екран «Місяць» з повним чеклістом платежів.
  */
 const BILL_DAYS_WORK = 7
 const BILL_DAYS_ALL = 31
@@ -100,12 +101,23 @@ export default function Tasks() {
   const [pinned, setPinned] = useState(readPinShopping)
   const togglePin = () => { const next = !pinned; setPinned(next); writePinShopping(next) }
 
+  const nav = useNavigate()
   const pending = shoppingPending(db)
   const shop: Item | null = pending
     ? { kind: 'shop', id: 'shop', count: pending.count, allChecked: pending.allChecked }
     : null
   const [draft, setDraft] = useState('')
-  const [openId, setOpenId] = useState<string | null>(null)
+  // Лист задачі й фільтр проєкту живуть в адресі: на них посилаються
+  // інші екрани (`/tasks?task=<id>`, `/tasks?project=<id>`).
+  const [openId, setOpenId] = useSheet('task')
+  const [params, setParams] = useSearchParams()
+  const projectFilter = params.get('project')
+  const setProjectFilter = (id: string | null) => setParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (id) next.set('project', id); else next.delete('project')
+    return next
+  }, { replace: true })
+  const filterProject = projectFilter ? db.projects.find(p => p.id === projectFilter) : undefined
   const [billId, setBillId] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(false)
   const draftRef = useRef<HTMLInputElement>(null)
@@ -113,60 +125,75 @@ export default function Tasks() {
   const t = today()
   const billHorizon = billHorizonFor(view, t)
 
+  // Фільтр проєкту накладається поверх вкладки — і на задачі, і на платежі.
+  const tasksHere = useMemo(
+    () => db.tasks.filter(x => !projectFilter || x.projectId === projectFilter),
+    [db.tasks, projectFilter])
+  const occHere = useMemo(
+    () => db.occurrences.filter(o => !projectFilter || o.projectId === projectFilter),
+    [db.occurrences, projectFilter])
+
   const visible = useMemo(
-    () => db.tasks.filter(x => showTask(x, view, t, db.meId)),
-    [db.tasks, view, db.meId, t])
+    () => tasksHere.filter(x => showTask(x, view, t, db.meId)),
+    [tasksHere, view, db.meId, t])
 
   // платежі — той самий фільтр вкладки, але зі своєю стелею по датах
   const bills = useMemo(
-    () => db.occurrences.filter(o => showBill(o, view, t, db.meId)),
-    [db.occurrences, view, db.meId, t])
+    () => occHere.filter(o => showBill(o, view, t, db.meId)),
+    [occHere, view, db.meId, t])
 
   // скільки платежів лишилось за горизонтом — одним рядком, а не сотнею
-  const beyond = db.occurrences.filter(o => openBill(o) && o.dueDate > billHorizon).length
+  const beyond = occHere.filter(o => openBill(o) && o.dueDate > billHorizon).length
 
   // Бейдж рахується ТИМИ САМИМИ фільтрами, що й список під ним: інакше
   // «Мої 16» над чотирнадцятьма рядками виглядає як загублені задачі.
-  // рядок походу в магазин стоїть у кожній вкладці — тож і в кожному бейджі
-  const hasShop = !!pending
+  // рядок походу в магазин стоїть у кожній вкладці — тож і в кожному бейджі;
+  // до проєкту похід не належить, тож у відфільтрованому списку його немає
+  const hasShop = !!pending && !projectFilter
   const counts = useMemo(() => {
     const count = (v: View) =>
-      db.tasks.filter(x => x.status !== 'done' && showTask(x, v, t, db.meId)).length
-      + db.occurrences.filter(o => showBill(o, v, t, db.meId)).length
+      tasksHere.filter(x => x.status !== 'done' && showTask(x, v, t, db.meId)).length
+      + occHere.filter(o => showBill(o, v, t, db.meId)).length
       + (hasShop ? 1 : 0)
     return { mine: count('mine'), today: count('today'), open: count('open') }
-  }, [db.tasks, db.occurrences, db.meId, t, hasShop])
+  }, [tasksHere, occHere, db.meId, t, hasShop])
 
   // платежі живуть у «До виконання» — один список, а не друга секція поруч
   const itemsFor = (status: TaskStatus): Item[] => {
     const rows: Item[] = visible
       .filter(x => x.status === status)
       .map(task => ({ kind: 'task' as const, id: task.id, task }))
+    const shopRow = hasShop ? shop : null
     if (status === 'todo') {
       rows.push(...bills.map(occ => ({ kind: 'bill' as const, id: occ.id, occ })))
-      if (shop && !pinned) rows.push(shop)
+      if (shopRow && !pinned) rows.push(shopRow)
     }
     const sorted = sortItems(rows)
     // закріплений похід іде першим і не вдає із себе пріоритет, якого не має
-    return status === 'todo' && shop && pinned ? [shop, ...sorted] : sorted
+    return status === 'todo' && shopRow && pinned ? [shopRow, ...sorted] : sorted
   }
 
-  const openCount = visible.filter(x => x.status !== 'done').length + bills.length + (shop ? 1 : 0)
+  const openCount = visible.filter(x => x.status !== 'done').length + bills.length + (hasShop ? 1 : 0)
 
   const done: Item[] = useMemo(() => {
     const since = addDays(t, -7)
     const tasks: Item[] = visible.filter(x => x.status === 'done')
       .map(task => ({ kind: 'task' as const, id: task.id, task }))
-    const settled: Item[] = db.occurrences
+    const settled: Item[] = occHere
       .filter(o => (o.status === 'paid' || o.status === 'skipped') && (o.paidOn ?? o.dueDate) >= since)
       .map(occ => ({ kind: 'bill' as const, id: occ.id, occ }))
     return [...tasks, ...settled].sort((a, b) => doneAt(b).localeCompare(doneAt(a)))
-  }, [visible, db.occurrences, t])
+  }, [visible, occHere, t])
 
   const submit = () => {
     const title = draft.trim()
     if (!title) return
-    addTask({ title, assigneeId: view === 'mine' ? db.meId : undefined })
+    // у відфільтрованому списку нова задача належить тому самому проєкту —
+    // інакше вона зникла б із екрана одразу після Enter
+    addTask({
+      title, assigneeId: view === 'mine' ? db.meId : undefined,
+      projectId: projectFilter ?? undefined,
+    })
     setDraft('')
   }
 
@@ -194,6 +221,22 @@ export default function Tasks() {
             placeholder="Нова задача — Enter, щоб додати"
             className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-faint" />
         </div>
+        {projectFilter && (
+          <div className="flex items-center gap-1 mb-1 min-w-0">
+            <span className="inline-flex items-center min-w-0 max-w-full rounded-lg border border-line bg-surface text-[13px]">
+              <button type="button" className="min-w-0 truncate pl-2.5 pr-1 h-7 text-left hover:text-accent"
+                disabled={!filterProject}
+                onClick={() => filterProject && nav(projectRoute(filterProject.id))}
+                title={filterProject ? 'Відкрити проєкт' : undefined}>
+                <span className="text-faint">Проєкт: </span>{filterProject?.name ?? 'не знайдено'}
+              </button>
+              <button type="button" onClick={() => setProjectFilter(null)} aria-label="Зняти фільтр проєкту"
+                className="shrink-0 h-7 w-7 grid place-items-center text-faint hover:text-ink">
+                {Icon.x(14)}
+              </button>
+            </span>
+          </div>
+        )}
       </div>
 
       {GROUPS.map(g => {
@@ -207,7 +250,8 @@ export default function Tasks() {
             </div>
             <Rows>
               {rows.map(it =>
-                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)}
+                    onProject={projectFilter ? undefined : setProjectFilter} />
                 : it.kind === 'shop' ? <ShopRow key={it.id} item={it} pinned={pinned} onTogglePin={togglePin} />
                 : <BillRow key={it.id} o={it.occ} compact onOpen={() => setBillId(it.id)} />)}
             </Rows>
@@ -218,15 +262,16 @@ export default function Tasks() {
       {beyond > 0 && (
         <div className="px-4 sm:px-6 mt-2 text-[12.5px] text-faint">
           Ще <span className="num">{beyond}</span> {plural(beyond, 'платіж', 'платежі', 'платежів')} далі —
-          {view === 'all' ? ' у розділі «Платежі».' : ' у вкладці «Всі».'}
+          {view === 'all' ? ' у «Місяці».' : ' у вкладці «Всі».'}
         </div>
       )}
 
       {openCount === 0 && (
         <Empty>
           <p className="mb-3">
-            Тут збираються побутові задачі й платежі, яким настав час.
-            Поки порожньо — нічого не горить.
+            {projectFilter
+              ? 'Тут будуть задачі й платежі цього проєкту. Нова задача з поля вище одразу потрапить у проєкт.'
+              : 'Тут збираються побутові задачі й платежі, яким настав час. Поки порожньо — нічого не горить.'}
           </p>
           <Btn onClick={() => draftRef.current?.focus()}>Додати задачу</Btn>
         </Empty>
@@ -242,7 +287,8 @@ export default function Tasks() {
           {showDone && (
             <Rows>
               {done.slice(0, 30).map(it =>
-                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
+                it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)}
+                    onProject={projectFilter ? undefined : setProjectFilter} />
                 : it.kind === 'shop' ? null
                 : <BillRow key={it.id} o={it.occ} compact onOpen={() => setBillId(it.id)} />)}
             </Rows>
@@ -280,6 +326,7 @@ export default function Tasks() {
           Секція згорнута, щоб не тиснути на щоденний список. */}
       <TemplatesSection />
 
+      {/* невідомий id у ?task= — просто нічого не відкриваємо */}
       <TaskSheet task={open} onClose={() => setOpenId(null)} />
       {/* key: стан «спитати суму» належить одному платежу, а не листу взагалі */}
       <BillSheet key={billId ?? 'none'} occ={bill} onClose={() => setBillId(null)} />
@@ -390,9 +437,22 @@ function ShopRow({ item, pinned, onTogglePin }: {
   )
 }
 
-function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
+/** Іконка проєкту за напрямом грошей — та сама мова, що в посиланнях. */
+function projectIcon(p: Pick<Project, 'direction'>, size = 14) {
+  if (p.direction === 'save') return Icon.piggy(size)
+  if (p.direction === 'repay') return Icon.list(size)
+  if (p.direction === 'spend') return Icon.wallet(size)
+  return Icon.check(size)
+}
+
+function TaskRow({ task, onOpen, onProject }: {
+  task: Task; onOpen: () => void
+  /** Тап по чипу проєкту фільтрує список. Немає — список уже відфільтрований, чип зайвий. */
+  onProject?: (id: ID) => void
+}) {
   const db = useDB()
   const member = db.members.find(m => m.id === task.assigneeId)
+  const project = onProject && task.projectId ? db.projects.find(p => p.id === task.projectId) : undefined
   const isDone = task.status === 'done'
   const due = task.dueDate ? relativeDue(task.dueDate) : null
 
@@ -425,6 +485,13 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
         <span className={`text-[14px] block truncate ${isDone ? 'line-through text-faint' : ''}`}>{task.title}</span>
       </button>
 
+      {project && (
+        <button type="button" onClick={() => onProject?.(project.id)}
+          title={`Задачі проєкту «${project.name}»`}
+          className="min-w-0 max-w-[30%] sm:max-w-[160px] truncate text-[11.5px] text-faint px-1.5 py-0.5 rounded border border-line hover:text-ink hover:border-line2">
+          {project.name}
+        </button>
+      )}
       {task.templateId && <span className="shrink-0 text-faint text-[11px]" title="Повторювана">↻</span>}
       {task.area && <span className="shrink-0 hidden sm:block text-[11.5px] text-faint px-1.5 py-0.5 rounded border border-line">{task.area}</span>}
       {due && !isDone && (
@@ -449,8 +516,9 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
   const nav = useNavigate()
   const [askAmount, setAskAmount] = useState(false)
   if (!occ) return null
-  const envelope = db.envelopes.find(e => e.id === occ.envelopeId)
-  const fund = occ.fundId ? db.funds.find(f => f.id === occ.fundId) : undefined
+  const project = db.projects.find(p => p.id === occ.projectId)
+  const income = isIncomeOccurrence(db, occ)
+  const month = occ.dueDate.slice(0, 7)
   const plan = occ.planId ? db.recurringPlans.find(p => p.id === occ.planId) : undefined
   const member = db.members.find(m => m.id === occ.assigneeId)
   const settled = occ.status === 'paid' || occ.status === 'skipped'
@@ -472,14 +540,12 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
 
       {/* звідки цей платіж і куди лягає — переходами, а не описом */}
       <div className="flex flex-wrap items-center gap-1.5 mb-4">
-        {fund && (
-          <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
-            внесок у «{fund.name}»
+        {plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan))}>{ruleText(plan)}</LinkChip>}
+        {project && !project.isFree && (
+          <LinkChip icon={project.direction === 'save' ? 'piggy' : project.direction === 'repay' ? 'list' : 'wallet'}
+            onClick={() => nav(projectRoute(project.id))}>
+            {project.name}
           </LinkChip>
-        )}
-        {plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan.id))}>{ruleText(plan)}</LinkChip>}
-        {envelope && (
-          <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
         )}
       </div>
 
@@ -488,7 +554,7 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
           Скасувати підтвердження — квадратом у рядку. Весь місяць — у чеклісті.
           <div className="mt-2">
             {/* чекліст того місяця, де платіж, а не поточного */}
-            <Btn onClick={() => nav(occ.dueDate.slice(0, 7) === thisMonth() ? '/bills' : `/bills?m=${occ.dueDate.slice(0, 7)}`)}>
+            <Btn onClick={() => nav(monthRoute(month === thisMonth() ? undefined : month))}>
               Відкрити чекліст
             </Btn>
           </div>
@@ -505,8 +571,12 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
             <Btn onClick={() => { skipOccurrence(occ.id); onClose() }}>Пропустити</Btn>
           </div>
           <div className="text-[12px] text-faint mt-2">
-            Підтвердження запише витрату в конверт, а якщо платіж фінансує фонд — і списання з нього.
-            Пропуск лишає платіж в історії зі статусом «пропущено».
+            {income
+              ? 'Підтвердження запише надходження у «Вільні гроші».'
+              : project && !project.isFree
+                ? `Підтвердження запише ${project.direction === 'repay' ? 'погашення' : 'витрату'} в проєкт «${project.name}».`
+                : 'Підтвердження запише витрату з вільних грошей.'}
+            {' '}Пропуск лишає платіж в історії зі статусом «пропущено».
           </div>
         </>
       )}
@@ -537,11 +607,30 @@ const PRIORITY_OPTIONS: MenuOption<Priority>[] = ([1, 2, 3, 4, 0] as Priority[])
 
 // Меню працює з рядками; «вільна» задача в даних — це undefined.
 const UNASSIGNED = '__unassigned__'
+// так само «без проєкту» (побут) — це undefined
+const NO_PROJECT = '__no_project__'
+
+/**
+ * Проєкти, до яких можна привʼязати задачу: активні, крім «Вільних».
+ * Поточний завершений лишається у списку, інакше меню показало б «Без проєкту»,
+ * хоча задача досі в ньому.
+ */
+function taskProjectOptions(db: DB, currentId?: ID): MenuOption<string>[] {
+  const list = payableProjects(db)
+  const current = currentId ? db.projects.find(p => p.id === currentId) : undefined
+  if (current && !list.includes(current)) list.push(current)
+  return [
+    { value: NO_PROJECT, label: 'Без проєкту', icon: <span className="text-faint">{Icon.home(14)}</span> },
+    ...list.map(p => ({ value: p.id, label: p.name, icon: <span className="text-muted">{projectIcon(p)}</span> })),
+  ]
+}
 
 function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }) {
   const db = useDB()
+  const nav = useNavigate()
   if (!task) return null
   const areas = knownAreas(db)
+  const project = task.projectId ? db.projects.find(p => p.id === task.projectId) : undefined
 
   return (
     <Sheet open={!!task} onClose={onClose} title="Задача">
@@ -559,6 +648,17 @@ function TaskSheet({ task, onClose }: { task: Task | null; onClose: () => void }
             { value: UNASSIGNED, label: 'Вільна', icon: <Avatar size={16} /> },
           ]}
           onChange={v => setAssignee(task.id, v === UNASSIGNED ? undefined : v)} />
+        <PropertyMenu label="Проєкт" value={task.projectId ?? NO_PROJECT}
+          options={taskProjectOptions(db, task.projectId)}
+          onChange={v => updateTask(task.id, { projectId: v === NO_PROJECT ? undefined : v })} />
+        {/* окремий перехід, а не частина меню: чип меню вибирає, а не веде геть */}
+        {project && (
+          <span className="inline-flex items-center">
+            <LinkChip onClick={() => { onClose(); nav(projectRoute(project.id)) }}>
+              відкрити {Icon.chev(11)}
+            </LinkChip>
+          </span>
+        )}
       </div>
 
       {/* Решта задачі здебільшого порожня: дедлайн, зона, нотатка потрібні
@@ -786,6 +886,9 @@ function TemplateRow({ tpl, db, onOpen }: { tpl: TaskTemplate; db: DB; onOpen: (
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[14px]">{tpl.title}</span>
             {tpl.area && <Badge>{tpl.area}</Badge>}
+            {tpl.projectId && db.projects.find(p => p.id === tpl.projectId) && (
+              <Badge>{db.projects.find(p => p.id === tpl.projectId)!.name}</Badge>
+            )}
             {!tpl.active && <Badge tone="warn">вимкнено</Badge>}
           </div>
           <div className="text-[12.5px] text-faint">
@@ -826,6 +929,7 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
   const [rotation, setRotation] = useState<TaskTemplate['rotation']>(initial.rotation)
   const [assignee, setAssignee] = useState<ID | undefined>(initial.defaultAssigneeId)
   const [active, setActive] = useState(initial.active)
+  const [projectId, setProjectId] = useState(initial.projectId ?? '')
 
   /** Видалення дають лише наявному шаблону — по ньому й розрізняємо новий. */
   const isNew = !onDelete
@@ -853,6 +957,7 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
       lastCompletedAt: initial.lastCompletedAt,
       rotation,
       defaultAssigneeId: rotation === 'least_loaded' ? undefined : assignee,
+      projectId: projectId || undefined,
       active,
     })
   }
@@ -989,6 +1094,17 @@ function TemplateForm({ db, initial, onSave, onCancel, onDelete }: {
             <Field label="Складність" hint="Важить у балансі за 28 днів і в черзі повторюваних задач."
               onRemove={remove}>
               <Segmented<'1' | '2' | '3'> full value={effort} onChange={setEffort} label="Складність" items={EFFORTS} />
+            </Field>
+          ) },
+
+        { key: 'project', label: 'Проєкт', filled: !!projectId, clear: () => setProjectId(''),
+          render: remove => (
+            <Field label="Проєкт" htmlFor="tpl-project" onRemove={remove}
+              hint="Для порядку: побутова задача зазвичай живе без проєкту.">
+              <Select id="tpl-project" value={projectId} onChange={setProjectId} placeholder="Без проєкту"
+                options={taskProjectOptions(db, initial.projectId)
+                  .filter(o => o.value !== NO_PROJECT)
+                  .map(o => ({ value: o.value, label: o.label }))} />
             </Field>
           ) },
       ]} />

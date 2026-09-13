@@ -11,7 +11,7 @@
  */
 import { admin, json, kyivDate, money, once, plural, release, sendTo } from '../_lib.js'
 
-interface Bill { name: string; envelope_id: string; expected_amount_minor: number; currency: string; due_date: string }
+interface Bill { name: string; recurring_plan_id: string | null; expected_amount_minor: number; currency: string; due_date: string }
 interface Todo { title: string; defer_until: string | null }
 
 export async function GET(request: Request): Promise<Response> {
@@ -36,9 +36,9 @@ export async function GET(request: Request): Promise<Response> {
       if (!member) continue
       const hh = member.household_id as string
 
-      const [{ data: bills }, { data: todos }, { data: incomeEnv }] = await Promise.all([
+      const [{ data: bills }, { data: todos }, { data: incomePlans }] = await Promise.all([
         db.from('occurrences')
-          .select('name, envelope_id, expected_amount_minor, currency, due_date')
+          .select('name, recurring_plan_id, expected_amount_minor, currency, due_date')
           .eq('household_id', hh).is('deleted_at', null)
           .in('status', ['due', 'projected'])
           .lte('due_date', tomorrow)
@@ -51,12 +51,12 @@ export async function GET(request: Request): Promise<Response> {
           .lte('due_date', today)
           .or(`assignee_id.eq.${p},assignee_id.is.null`)
           .order('due_date'),
-        db.from('envelopes').select('id').eq('household_id', hh).eq('kind', 'income'),
+        db.from('recurring_plans').select('id').eq('household_id', hh).eq('flow', 'in'),
       ]) as [{ data: Bill[] | null }, { data: Todo[] | null }, { data: { id: string }[] | null }]
 
       // очікувана зарплата — не справа, яку треба зробити
-      const income = new Set((incomeEnv ?? []).map(e => e.id))
-      const b = (bills ?? []).filter(x => !income.has(x.envelope_id))
+      const income = new Set((incomePlans ?? []).map(p => p.id))
+      const b = (bills ?? []).filter(x => !x.recurring_plan_id || !income.has(x.recurring_plan_id))
       // відкладене до майбутньої дати людина свідомо прибрала з очей
       const t = (todos ?? []).filter(x => !x.defer_until || x.defer_until <= today)
       if (!b.length && !t.length) continue
