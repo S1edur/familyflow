@@ -35,6 +35,7 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 | `Layout.tsx` | `Empty`, `SectionTitle`, `Card`, `ListRow`, `Stat` |
 | `Badge.tsx` | `Badge`, `Pill` |
 | `Form.tsx` | `Field`, `Input`, `Textarea`, `Select`, `MoneyInput`, `DateInput`, `Switch`, `fieldClass` |
+| `Optional.tsx` | `OptionalFields` |
 
 ---
 
@@ -135,9 +136,34 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 (висота 40, `rounded-lg border border-line bg-surface`, фокус — `accent`).
 
 ### `Field`
-`{ label: string; children; hint?: string; error?: string; htmlFor?: string }`.
+`{ label: string; children; hint?: string; error?: string; htmlFor?: string; onRemove?: () => void }`.
 Підпис + контрол + підказка. Коли є `error`, він замінює `hint` і показується
 **бурштиновим** — червоне лишаємо руйнівним діям.
+`onRemove` домальовує хрестик біля підпису — для необовʼязкових полів,
+які згортаються назад у кнопку (див. `OptionalFields`).
+
+### `OptionalFields`
+`{ items: OptionalItem[]; label?: string /* 'Додати' */ }`, де
+`OptionalItem = { key; label; filled: boolean; clear?: () => void; render: (remove?) => ReactNode }`.
+
+**Порожнє необовʼязкове поле — це не поле, а кнопка «додати».** Форма, де всі
+можливості розкладені порожніми інпутами, читається як список обовʼязків:
+видно десять полів і незрозуміло, які з них твої.
+
+Поле показується, якщо `filled` або якщо його щойно додали; порожнє згортається
+назад. `render` отримує дію «прибрати» і віддає її в `Field onRemove`.
+Обовʼязкові поля сюди не кладемо — назва, сума, конверт видимі завжди.
+
+```tsx
+<OptionalFields items={[
+  { key: 'notes', label: 'Нотатка', filled: !!d.notes, clear: () => set('notes', ''),
+    render: remove => (
+      <Field label="Нотатка" onRemove={remove}>
+        <Textarea value={d.notes} onChange={v => set('notes', v)} />
+      </Field>
+    ) },
+]} />
+```
 
 ### `Input`
 `{ value: string; onChange: (v: string) => void; placeholder?; id?; type?: 'text'|'search'|'url'|'tel'; disabled?; autoFocus?; inputMode?; onEnter?; align?: 'left'|'right' }`.

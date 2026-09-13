@@ -12,12 +12,22 @@ export const fieldClass =
  * Підпис + контрол + підказка або помилка.
  * Помилка бурштинова: червоне лишаємо тільки для руйнівних дій.
  */
-export function Field({ label, children, hint, error, htmlFor }: {
+export function Field({ label, children, hint, error, htmlFor, onRemove }: {
   label: string; children: ReactNode; hint?: string; error?: string; htmlFor?: string
+  /** Необовʼязкове поле: згортає його назад у кнопку «додати». */
+  onRemove?: () => void
 }) {
   return (
     <div className="mb-3">
-      <label htmlFor={htmlFor} className="block text-[11.5px] uppercase tracking-wider text-faint mb-1.5">{label}</label>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <label htmlFor={htmlFor} className="block text-[11.5px] uppercase tracking-wider text-faint">{label}</label>
+        {onRemove && (
+          <button type="button" onClick={onRemove} aria-label={`Прибрати поле «${label}»`}
+            className="shrink-0 -my-1 p-1 text-faint hover:text-ink transition-colors">
+            {Icon.x(13)}
+          </button>
+        )}
+      </div>
       {children}
       {error
         ? <div className="text-[12px] text-warn mt-1">{error}</div>
