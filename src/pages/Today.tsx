@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Btn, Empty, Icon, PriorityMark, Rows } from '../ui'
-import { useDB, monthSummary, completeTask, confirmOccurrence, upcomingOccurrences, fundBalance, debtStatus, shoppingPending, isIncomeOccurrence } from '../data/store'
+import { BillRow } from '../components/BillRow'
+import { useDB, monthSummary, completeTask, upcomingOccurrences, fundBalance, debtStatus, shoppingPending } from '../data/store'
 import { hasIncome, setupSteps } from '../data/setup'
 import { newRuleRoute } from '../data/links'
-import { money, moneyShort } from '../lib/money'
+import { money, moneyShort, toBase } from '../lib/money'
 import { longDate, relativeDue, thisMonth, today } from '../lib/dates'
 import { readPinShopping, readSetupHidden, writeSetupHidden } from '../lib/prefs'
-import type { Occurrence } from '../data/types'
 
 export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
   const db = useDB()
@@ -21,15 +21,22 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
       && (!x.dueDate || x.dueDate <= t))
     .sort((a, b) => (a.priority === 0 ? 9 : a.priority) - (b.priority === 0 ? 9 : b.priority))
 
-  const all = upcomingOccurrences(db, 7)
+  // Чужий платіж тут — це повідомлення «у другого прострочено», якого
+  // CLAUDE.md не дозволяє. Вільні (без виконавця) — спільні, їх показуємо.
+  const all = upcomingOccurrences(db, 7).filter(o => !o.assigneeId || o.assigneeId === db.meId)
   const overdue = all.filter(o => o.dueDate < t)
   const soon = all.filter(o => o.dueDate >= t)
   const cart = db.shoppingItems.filter(i => !i.checkedAt && !i.tripId).length
   // закріплення керується на екрані «Задачі»; тут лише поважаємо вибір
   const pending = shoppingPending(db)
   const shopRow = pending && readPinShopping() ? pending : null
-  const fundsTotal = db.funds.reduce((s, f) => s + fundBalance(db, f.id), 0)
-  const debtLeft = db.debts.filter(d => !d.closedOn).reduce((s, d) => s + debtStatus(db, d.id).remaining, 0)
+  // Залишки в різних валютах зводимо до гривні за сьогоднішнім курсом —
+  // складати долари з гривнями як є не можна (інваріанти 1 і 3).
+  const openDebts = db.debts.filter(d => !d.closedOn)
+  const fundsTotal = db.funds.reduce((s, f) => s + toBase(fundBalance(db, f.id), f.currency, db.rates), 0)
+  const debtLeft = openDebts.reduce((s, d) => s + toBase(debtStatus(db, d.id).remaining, d.currency, db.rates), 0)
+  const fundsApprox = db.funds.some(f => f.currency !== 'UAH' && fundBalance(db, f.id) !== 0) ? '≈ ' : ''
+  const debtApprox = openDebts.some(d => d.currency !== 'UAH' && debtStatus(db, d.id).remaining > 0) ? '≈ ' : ''
 
   return (
     <div className="max-w-[760px] mx-auto">
@@ -104,7 +111,7 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
             </h2>
           </div>
           <Rows>
-            {overdue.map(o => <BillRow key={o.id} o={o} />)}
+            {overdue.map(o => <BillRow key={o.id} o={o} compact />)}
           </Rows>
         </section>
       )}
@@ -116,14 +123,14 @@ export default function Today({ onQuickAdd }: { onQuickAdd: () => void }) {
         </div>
         {soon.length ? (
           <Rows>
-            {soon.map(o => <BillRow key={o.id} o={o} />)}
+            {soon.map(o => <BillRow key={o.id} o={o} compact />)}
           </Rows>
         ) : <Empty>Найближчим тижнем платежів немає</Empty>}
       </section>
 
       <section className="px-4 sm:px-6 mt-6 grid grid-cols-3 gap-2">
-        <Tile to="/funds" label="У фондах" value={moneyShort(fundsTotal)} />
-        <Tile to="/debts" label="Борг" value={moneyShort(debtLeft)} />
+        <Tile to="/funds" label="У фондах" value={fundsApprox + moneyShort(fundsTotal)} />
+        <Tile to="/debts" label="Борг" value={debtApprox + moneyShort(debtLeft)} />
         <Tile to="/shopping" label="У списку" value={String(cart)} />
       </section>
 
@@ -141,27 +148,6 @@ function Tile({ to, label, value }: { to: string; label: string; value: string }
       <div className="text-[11px] text-faint leading-tight">{label}</div>
       <div className="text-[14.5px] font-medium num leading-tight">{value}</div>
     </Link>
-  )
-}
-
-/** Той самий рядок, що в «Платежах»: квадрат ліворуч — одна дія, один тап. */
-function BillRow({ o }: { o: Occurrence }) {
-  const db = useDB()
-  const who = db.members.find(m => m.id === o.assigneeId)
-  const due = relativeDue(o.dueDate)
-  const label = isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'
-  return (
-    <li className="flex items-center gap-2.5 px-4 sm:px-6 py-2.5">
-      <button onClick={() => confirmOccurrence(o.id)} aria-label={`${label}: ${o.name}`} title={label}
-        className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent hover:bg-accentSoft transition-colors" />
-      <div className="flex-1 min-w-0">
-        <div className="text-[14px] truncate">{o.name}</div>
-        <div className={`text-[12px] num ${due.tone === 'over' ? 'text-warn' : 'text-faint'}`}>
-          {due.label}{who && <span className="text-faint"> · {who.name}</span>}
-        </div>
-      </div>
-      <span className="text-[14px] num text-muted shrink-0">{money(o.expectedMinor, o.currency)}</span>
-    </li>
   )
 }
 

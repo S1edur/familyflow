@@ -1,22 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Badge, Btn, ConfirmButton, DateInput, Empty, Field, FormActions, Icon, IconButton, Input,
+  Badge, Btn, ConfirmButton, DateInput, Empty, Field, FormActions, Icon, Input,
   LinkChip, MoneyInput, OptionalFields, Pill, Rows, SectionTitle, Segmented, Select, Sheet, Switch,
   useSheet,
 } from '../ui'
 import { MonthBar, useMonth } from '../components/MonthBar'
+import { BillRow } from '../components/BillRow'
 import {
-  useDB, confirmOccurrence, skipOccurrence, unconfirmOccurrence, addOccurrence,
-  addRecurringPlan, updateRecurringPlan, removeRecurringPlan, isIncomeOccurrence,
+  useDB, addOccurrence, addRecurringPlan, updateRecurringPlan, removeRecurringPlan,
 } from '../data/store'
 import {
-  DOW, debtRoute, envelopeRoute, fundRoute, nextDue, ruleRoute, ruleText,
+  DOW, debtRoute, envelopeRoute, fundRoute, nextDue, ruleText,
 } from '../data/links'
-import { money, parseAmount } from '../lib/money'
+import { money, toBase } from '../lib/money'
 import {
-  clampDayOfMonth, iso, isoDow, longDate, monthKey, monthTitle, parse,
-  relativeDue, shortDate, thisMonth, today,
+  isoDow, monthKey, monthTitle, parse, relativeDue, shortDate, thisMonth, today,
 } from '../lib/dates'
 import type { Currency, DB, Freq, ID, Occurrence, RecurringPlan } from '../data/types'
 
@@ -59,7 +58,10 @@ export default function Bills() {
     }), [db.occurrences, month])
 
   const left = bills.filter(b => b.status === 'due' || b.status === 'projected')
-  const leftMinor = left.reduce((s, o) => s + o.expectedMinor, 0)
+  // Платежі в різних валютах зводимо до гривні за сьогоднішнім курсом:
+  // вони ще не сталися, замороженого курсу в них немає (інваріант 3).
+  const leftMinor = left.reduce((s, o) => s + toBase(o.expectedMinor, o.currency, db.rates), 0)
+  const mixed = left.some(o => o.currency !== 'UAH')
 
   return (
     <div className="max-w-[980px] mx-auto pb-10">
@@ -67,7 +69,7 @@ export default function Bills() {
         <MonthBar month={month} onChange={setMonth} right={
           <span className="text-[12.5px] num text-muted">
             {left.length
-              ? <>лишилось <span className="text-ink">{left.length}</span> на <span className="text-ink">{money(leftMinor)}</span></>
+              ? <>лишилось <span className="text-ink">{left.length}</span> на <span className="text-ink">{mixed ? '≈ ' : ''}{money(leftMinor)}</span></>
               : 'усе закрито'}
           </span>
         } />
@@ -124,7 +126,7 @@ function BillsTab({ db, month, bills }: { db: DB; month: string; bills: Occurren
 
           {bills.length ? (
             <Rows>
-              {bills.map(b => <BillRow key={b.id} db={db} o={b} />)}
+              {bills.map(b => <BillRow key={b.id} o={b} />)}
             </Rows>
           ) : (
             <Empty>
@@ -188,101 +190,6 @@ function BillsTab({ db, month, bills }: { db: DB; month: string; bills: Occurren
         {oneOff && <OneOffForm db={db} month={month} onDone={() => setOneOff(false)} />}
       </Sheet>
     </div>
-  )
-}
-
-/**
- * Рядок чекліста. Головна дія одна — квадрат ліворуч, як у задачах: тап і
- * платіж оплачено. «Інша сума» й «Пропустити» потрібні рідко, тож живуть
- * за «⋯»: три кнопки під кожним із десяти платежів робили з чекліста стіну.
- */
-function BillRow({ db, o }: { db: DB; o: Occurrence }) {
-  const nav = useNavigate()
-  const [more, setMore] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [raw, setRaw] = useState('')
-  const assignee = db.members.find(m => m.id === o.assigneeId)
-  const plan = o.planId ? db.recurringPlans.find(p => p.id === o.planId) : undefined
-  const fund = o.fundId ? db.funds.find(f => f.id === o.fundId) : undefined
-  const envelope = db.envelopes.find(e => e.id === o.envelopeId)
-  const paid = o.status === 'paid'
-  const settled = paid || o.status === 'skipped'
-  const overdue = o.status === 'due' && o.dueDate < today()
-  const doneLabel = isIncomeOccurrence(db, o) ? 'Отримано' : 'Оплачено'
-
-  return (
-    <li className="px-4 sm:px-6 py-2.5">
-      <div className="flex items-start gap-3">
-        {settled ? (
-          <button onClick={() => unconfirmOccurrence(o.id)}
-            aria-label={`Повернути в неоплачені: ${o.name}`} title="Повернути в неоплачені"
-            className={`mt-0.5 shrink-0 h-5 w-5 rounded-[6px] border grid place-items-center transition-colors ${
-              paid ? 'bg-accent border-accent text-white' : 'border-line2 text-faint'}`}>
-            {paid ? Icon.check(13) : '—'}
-          </button>
-        ) : (
-          <button onClick={() => confirmOccurrence(o.id)}
-            aria-label={`${doneLabel}: ${o.name}`} title={doneLabel}
-            className="mt-0.5 shrink-0 h-5 w-5 rounded-[6px] border border-line2 hover:border-accent hover:bg-accentSoft transition-colors" />
-        )}
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-3">
-            <span className={`flex-1 min-w-0 text-[14px] truncate ${settled ? 'text-faint line-through' : ''}`}>{o.name}</span>
-            <span className={`shrink-0 text-[14px] num ${settled ? 'text-faint' : 'text-muted'}`}>
-              {money(paid ? o.actualMinor ?? o.expectedMinor : o.expectedMinor, o.currency)}
-            </span>
-          </div>
-          <div className="text-[12px] text-faint num">
-            {shortDate(o.dueDate)}
-            {overdue && <span className="text-warn"> · прострочено</span>}
-            {paid && <span> · оплачено</span>}
-            {o.status === 'skipped' && <span> · пропущено</span>}
-            {assignee && !settled && <span> · {assignee.name}</span>}
-          </div>
-
-          {!settled && (envelope || fund || plan) && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {/* звідки цей платіж узявся і куди лягає — одним тапом, без пошуку по екранах */}
-              {fund
-                ? <LinkChip icon="piggy" tone="accent" onClick={() => nav(fundRoute(fund.id))}>
-                    внесок у «{fund.name}»
-                  </LinkChip>
-                : plan && <LinkChip icon="clock" onClick={() => nav(ruleRoute(plan.id))}>{ruleText(plan)}</LinkChip>}
-              {envelope && (
-                <LinkChip icon="wallet" onClick={() => nav(envelopeRoute(envelope.id))}>{envelope.name}</LinkChip>
-              )}
-            </div>
-          )}
-
-          {more && !settled && (
-            <div className="flex gap-1.5 mt-2">
-              <Btn onClick={() => { setEditing(true); setRaw(String(o.expectedMinor / 100)); setMore(false) }}>Інша сума</Btn>
-              <Btn variant="quiet" onClick={() => { skipOccurrence(o.id); setMore(false) }}>Пропустити</Btn>
-            </div>
-          )}
-        </div>
-
-        {!settled && (
-          <span className="shrink-0 -mt-1 -mr-2">
-            <IconButton label={`Ще дії: ${o.name}`} onClick={() => setMore(v => !v)}>{Icon.more(16)}</IconButton>
-          </span>
-        )}
-      </div>
-
-      <Sheet open={editing} onClose={() => setEditing(false)} title={o.name}>
-        <div className="text-center py-4">
-          <input autoFocus value={raw} onChange={e => setRaw(e.target.value)} inputMode="decimal"
-            aria-label="Фактична сума"
-            className="w-full text-center text-[32px] font-semibold num bg-transparent outline-none" />
-          <div className="text-[12.5px] text-faint mt-1">очікували {money(o.expectedMinor, o.currency)}</div>
-        </div>
-        <Btn variant="primary" full disabled={!parseAmount(raw)}
-          onClick={() => { const m = parseAmount(raw); if (m) { confirmOccurrence(o.id, m); setEditing(false) } }}>
-          Записати як {doneLabel.toLowerCase()}
-        </Btn>
-      </Sheet>
-    </li>
   )
 }
 
@@ -413,8 +320,15 @@ function RuleForm({ db, editing, presetEnvelopeId, presetDebtId, onDone }: {
   const envelopes = db.envelopes
     .filter(e => !e.archived && e.kind !== 'income')
     .sort((a, b) => a.sortOrder - b.sortOrder)
-  const funds = db.funds.filter(f => !f.archived)
-  const debts = db.debts.filter(x => !x.closedOn || x.id === draft.debtId)
+  // Фонд і борг — лише у валюті правила: store списує суму платежу як є,
+  // і гривневі копійки, зняті з доларового фонду, мовчки ламають баланс.
+  const funds = db.funds.filter(f => f.currency === draft.currency && (!f.archived || f.id === draft.fundId))
+  const debts = db.debts.filter(x => x.currency === draft.currency && (!x.closedOn || x.id === draft.debtId))
+  const setCurrency = (c: Currency) => setDraft(d => ({
+    ...d, currency: c,
+    fundId: db.funds.find(f => f.id === d.fundId)?.currency === c ? d.fundId : '',
+    debtId: db.debts.find(x => x.id === d.debtId)?.currency === c ? d.debtId : '',
+  }))
 
   const year = Number(thisMonth().slice(0, 4))
   const monthOptions = Array.from({ length: 12 }, (_, i) => ({
@@ -450,8 +364,9 @@ function RuleForm({ db, editing, presetEnvelopeId, presetDebtId, onDone }: {
       byMonth: draft.freq === 'yearly' ? draft.byMonth : undefined,
       anchorDate: draft.anchorDate,
       assigneeId: draft.assigneeId || undefined,
-      fundId: draft.fundId || undefined,
-      debtId: draft.debtId || undefined,
+      // старе правило могло бути звʼязане з іншою валютою — таке не зберігаємо
+      fundId: funds.some(f => f.id === draft.fundId) ? draft.fundId : undefined,
+      debtId: debts.some(x => x.id === draft.debtId) ? draft.debtId : undefined,
       active: draft.active,
     }
     // майбутні платежі перегенерує store — руками occurrences не чіпаємо
@@ -574,11 +489,12 @@ function RuleForm({ db, editing, presetEnvelopeId, presetDebtId, onDone }: {
             </Field>
           ) }] : []),
         { key: 'currency', label: 'Валюта', filled: draft.currency !== 'UAH',
-          clear: () => set('currency', 'UAH'),
+          clear: () => setCurrency('UAH'),
           render: remove => (
-            <Field label="Валюта" onRemove={remove}>
+            <Field label="Валюта" onRemove={remove}
+              hint={draft.fundId || draft.debtId ? 'Фонд і борг мають бути в тій самій валюті.' : undefined}>
               <Segmented<Currency> label="Валюта" full value={draft.currency}
-                onChange={v => set('currency', v)}
+                onChange={setCurrency}
                 items={[{ value: 'UAH', label: '₴ гривня' }, { value: 'USD', label: '$ долар' }, { value: 'EUR', label: '€ євро' }]} />
             </Field>
           ) },

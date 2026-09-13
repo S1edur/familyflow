@@ -8,7 +8,7 @@
  * тільки учаснику ТОГО САМОГО дому: інакше будь-хто з акаунтом міг би
  * засипати пушами чужих людей.
  */
-import { admin, json, once, sendTo } from './_lib.js'
+import { admin, json, once, release, sendTo } from './_lib.js'
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -49,7 +49,8 @@ export async function POST(request: Request): Promise<Response> {
       if (!mine || mine !== theirs) return json(403, { error: 'Не з вашого дому' })
 
       // перепризначили туди-сюди — другий пуш тій самій людині вже не потрібен
-      if (!await once(`assigned:${taskId}:${assigneeId}`)) return json(200, { sent: 0 })
+      const key = `assigned:${taskId}:${assigneeId}`
+      if (!await once(key)) return json(200, { sent: 0 })
 
       const { data: profile } = await db.from('profiles').select('display_name').eq('id', me).maybeSingle()
       const who = (profile?.display_name ?? '').trim()
@@ -61,6 +62,7 @@ export async function POST(request: Request): Promise<Response> {
         url: '/#/tasks',
         tag: `task:${taskId}`,
       })
+      if (sent === 0) await release(key)
       return json(200, { sent })
     }
 

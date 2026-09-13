@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Avatar, Btn, ConfirmButton, Empty, Field, FormActions, Icon,
   IconButton, Input, ListRow, MoneyInput, Pill, SectionTitle, Select, Sheet, toast, Rows,
@@ -7,7 +8,7 @@ import {
   useDB, addShoppingItem, updateShoppingItem, toggleShoppingItem,
   removeShoppingItem, finishShopping,
 } from '../data/store'
-import type { ShoppingItem } from '../data/types'
+import type { DB, ShoppingItem } from '../data/types'
 import { money } from '../lib/money'
 import { shortDate } from '../lib/dates'
 
@@ -73,8 +74,10 @@ export default function Shopping() {
       </header>
 
       <div className="px-4 sm:px-6">
+        {/* без autoFocus: на телефоні він відкривав клавіатуру щойно людина зайшла
+            подивитись список; фокус ставить кнопка в порожньому стані */}
         <Input id={ADD_INPUT_ID} value={draft} onChange={setDraft} onEnter={submit}
-          autoFocus placeholder="Додати — Enter" />
+          placeholder="Додати — Enter" />
         {(draft.trim() || category) && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             <Pill active={!category} onClick={() => setCategory('')} title="Відділ підбереться сам">
@@ -234,20 +237,47 @@ function PastTrips() {
   )
 }
 
+/**
+ * Конверт для походу за замовчуванням — рахується на читанні, без зашитої назви:
+ * у кожного дому конверти звуться по-своєму, а в новому їх може ще не бути.
+ * Куди раніше записували походи → перший змінний → перший будь-який витратний.
+ */
+function defaultTripEnvelope(db: DB): string | undefined {
+  const usable = db.envelopes.filter(e => e.kind !== 'income' && !e.archived)
+  const ids = new Set(usable.map(e => e.id))
+  const counts = new Map<string, number>()
+  for (const e of db.entries) {
+    if (!e.tripId || !e.envelopeId || !ids.has(e.envelopeId)) continue
+    counts.set(e.envelopeId, (counts.get(e.envelopeId) ?? 0) + 1)
+  }
+  let best: string | undefined
+  for (const [id, n] of counts) if (!best || n > counts.get(best)!) best = id
+  return best
+    ?? usable.find(e => e.kind === 'variable')?.id
+    ?? usable[0]?.id
+    ?? db.envelopes.find(e => e.kind !== 'income')?.id
+}
+
 function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const db = useDB()
+  const navigate = useNavigate()
   const [store, setStore] = useState('')
   const [minor, setMinor] = useState(0)
-  const groceries = db.envelopes.find(e => e.name === 'Продукти') ?? db.envelopes[5]
-  const [envelopeId, setEnvelopeId] = useState(groceries.id)
+  // Вибір людини тримаємо окремо від замовчування: дані можуть приїхати вже після
+  // монтування, а вибраний раніше конверт — зникнути. Тоді беремо замовчування.
+  const [picked, setPicked] = useState('')
+  const fallback = defaultTripEnvelope(db)
+  const spendable = db.envelopes.filter(e => e.kind !== 'income' && (!e.archived || e.id === picked || e.id === fallback))
+  const envelopeId = spendable.some(e => e.id === picked) ? picked : fallback
 
   const save = () => {
-    if (!minor) return
+    if (!minor || !envelopeId) return
     const n = db.shoppingItems.filter(i => i.checkedAt && !i.tripId).length
     finishShopping(minor, envelopeId, store.trim() || undefined)
     toast(`Похід записано: ${money(minor)} · ${n} поз.`)
     setStore('')
     setMinor(0)
+    setPicked('')
     onClose()
   }
 
@@ -262,11 +292,22 @@ function FinishSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
       <Field label="Магазин" htmlFor="trip-store" hint="Необовʼязково">
         <Input id="trip-store" value={store} onChange={setStore} placeholder="—" />
       </Field>
-      <Field label="Конверт" htmlFor="trip-env">
-        <Select id="trip-env" value={envelopeId} onChange={setEnvelopeId}
-          options={db.envelopes.filter(e => e.kind !== 'income').map(e => ({ value: e.id, label: e.name }))} />
-      </Field>
-      <Btn variant="primary" full disabled={!minor} onClick={save}>Записати витрату</Btn>
+      {envelopeId ? (
+        <Field label="Конверт" htmlFor="trip-env">
+          <Select id="trip-env" value={envelopeId} onChange={setPicked}
+            options={spendable.map(e => ({ value: e.id, label: e.name }))} />
+        </Field>
+      ) : (
+        <div className="mb-3 rounded-lg bg-surface2 px-3 py-2.5 text-[13px] text-muted leading-snug">
+          <p>Похід записується витратою в конверт, а конвертів витрат ще немає.</p>
+          <div className="mt-2">
+            <Btn onClick={() => { onClose(); navigate('/envelopes?env=new') }}>
+              {Icon.plus(16)} Завести конверт
+            </Btn>
+          </div>
+        </div>
+      )}
+      <Btn variant="primary" full disabled={!minor || !envelopeId} onClick={save}>Записати витрату</Btn>
     </Sheet>
   )
 }

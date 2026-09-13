@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 
-/** Основна кнопка. `danger` — єдине місце, де застосунок червоніє. */
+/** Основна кнопка. Червоне — лише руйнівні дії (`danger`, озброєний `ConfirmButton`), не стани. */
 export function Btn({ children, onClick, variant = 'ghost', full, disabled, type }: {
   children: ReactNode; onClick?: () => void
   variant?: 'primary' | 'ghost' | 'quiet' | 'danger'; full?: boolean; disabled?: boolean

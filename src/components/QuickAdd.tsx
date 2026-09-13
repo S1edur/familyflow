@@ -9,6 +9,19 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', '⌫']
 type Kind = Extract<EntryKind, 'expense' | 'income'>
 const SUGGEST_DAYS = 60
 const SUGGEST_MAX = 4
+const NNBSP = '\u202F'
+
+// Розряди вузьким пробілом і кома, як у money(): сума на табло не має
+// виглядати інакше, ніж та сама сума в списку після запису.
+function formatRaw(raw: string): string {
+  const [int, frac] = raw.split(',')
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, NNBSP)
+  return frac === undefined ? grouped : `${grouped},${frac}`
+}
+
+function formatRate(rate: number): string {
+  return rate.toLocaleString('uk-UA', { maximumFractionDigits: 4 }).replace(/[\s\u00A0]/g, NNBSP)
+}
 
 // Конверти, куди найчастіше пишуть витрати останнім часом. Рахуємо на читанні
 // з записів, нічого не зберігаючи (інваріант 4): звичка змінюється — підказки теж.
@@ -50,25 +63,46 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
   const incoming = db.envelopes.filter(e => e.kind === 'income' && !e.archived)
   const suggested = useMemo(() => suggestEnvelopes(db), [db.envelopes, db.entries])
   // конверт запам'ятовується окремо для кожного типу: списки не перетинаються
-  const [expenseEnv, setExpenseEnv] = useState(() => suggestEnvelopes(db)[0]?.id ?? spendable[0]?.id ?? '')
+  const [expenseChoice, setExpenseEnv] = useState('')
   const [pickOther, setPickOther] = useState(false)
-  const [incomeEnv, setIncomeEnv] = useState(incoming[0]?.id ?? '')
+  const [incomeChoice, setIncomeEnv] = useState('')
+
+  // Вибір скидається при кожному відкритті листа: компонент живе весь час,
+  // а конверти до входу в хмару були демо-даними — їхні id у запис іти не мають.
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setExpenseEnv(suggested[0]?.id ?? spendable[0]?.id ?? '')
+      setIncomeEnv(incoming[0]?.id ?? '')
+      setPickOther(false)
+    }
+  }
+
+  // Перевірка на читанні: конверт могли видалити або дані могли замінитись,
+  // поки лист відкритий. Витрата без конверта допустима, дохід показує перший
+  // наявний — той самий, що бачить людина в Select.
+  const expenseEnv = spendable.some(e => e.id === expenseChoice) ? expenseChoice : ''
+  const incomeEnv = incoming.some(e => e.id === incomeChoice) ? incomeChoice : incoming[0]?.id ?? ''
 
   const envelopes = kind === 'income' ? incoming : spendable
   const envelopeId = kind === 'income' ? incomeEnv : expenseEnv
   const setEnvelopeId = kind === 'income' ? setIncomeEnv : setExpenseEnv
 
-  // шаблони: найчастіші пари (конверт, сума) з історії витрат
+  // шаблони: найчастіші трійки (конверт, валюта, сума) з історії витрат.
+  // Суму групуємо з точністю до гривні/долара — копійки не роблять запис іншим.
   const presets = useMemo(() => {
-    const counts = new Map<string, { envelopeId: string; amount: number; n: number }>()
+    const usable = new Set(db.envelopes.filter(e => e.kind !== 'income' && !e.archived).map(e => e.id))
+    const counts = new Map<string, { envelopeId: string; currency: Currency; amount: number; n: number }>()
     for (const e of db.entries) {
-      if (e.kind !== 'expense' || !e.envelopeId) continue
-      const k = `${e.envelopeId}|${Math.round(e.amountMinor / 10000) * 10000}`
-      const cur = counts.get(k) ?? { envelopeId: e.envelopeId, amount: Math.round(e.amountMinor / 10000) * 10000, n: 0 }
+      if (e.kind !== 'expense' || !e.envelopeId || !usable.has(e.envelopeId)) continue
+      const amount = Math.max(100, Math.round(e.amountMinor / 100) * 100)
+      const k = `${e.envelopeId}|${e.currency}|${amount}`
+      const cur = counts.get(k) ?? { envelopeId: e.envelopeId, currency: e.currency, amount, n: 0 }
       cur.n++; counts.set(k, cur)
     }
     return [...counts.values()].sort((a, b) => b.n - a.n).slice(0, 4)
-  }, [db.entries])
+  }, [db.entries, db.envelopes])
 
   const minor = parseAmount(raw)
   const press = (k: string) => {
@@ -114,7 +148,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
 
       <div className="text-center py-3">
         <div className="text-[34px] font-semibold num tracking-tight">
-          {raw ? `${raw} ` : <span className="text-faint">0 </span>}
+          {raw ? `${formatRaw(raw)} ` : <span className="text-faint">0 </span>}
           <span className="text-muted text-[24px]">{SYMBOL[currency]}</span>
         </div>
         <div className="text-[12.5px] text-faint mt-0.5">
@@ -129,9 +163,10 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
           {presets.map((p, i) => {
             const env = db.envelopes.find(e => e.id === p.envelopeId)
             return (
-              <Pill key={i} onClick={() => { setExpenseEnv(p.envelopeId); setRaw(String(p.amount / 100)) }}
-                title={`${env?.name}, ${money(p.amount)}`}>
-                <span className="text-[12.5px]">{env?.name} · <span className="num">{p.amount / 100}</span></span>
+              <Pill key={i}
+                onClick={() => { setExpenseEnv(p.envelopeId); setCurrency(p.currency); setRaw(String(p.amount / 100)) }}
+                title={`${env?.name}, ${money(p.amount, p.currency)}`}>
+                <span className="text-[12.5px]">{env?.name} · <span className="num">{money(p.amount, p.currency)}</span></span>
               </Pill>
             )
           })}
@@ -174,7 +209,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
         ))}
         {currency !== 'UAH' && (
           <span className="text-[12px] text-faint num ml-1">
-            курс {db.rates[currency]} → {minor ? money(Math.round(minor * db.rates[currency])) : '—'}
+            курс {formatRate(db.rates[currency])} → {minor ? money(Math.round(minor * db.rates[currency])) : '—'}
           </span>
         )}
       </div>
@@ -190,7 +225,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
 
       <div className="grid grid-cols-3 gap-1.5">
         {KEYS.map(k => (
-          <button key={k} onClick={() => press(k)}
+          <button key={k} onClick={() => press(k)} aria-label={k === '⌫' ? 'Стерти' : undefined}
             className="h-13 py-3.5 rounded-lg bg-surface2 text-[19px] font-medium num active:opacity-70">
             {k}
           </button>

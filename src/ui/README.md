@@ -6,8 +6,8 @@
 import { Card, Field, MoneyInput, FormActions } from '../ui'
 ```
 
-`src/components/ui.tsx` лишився як тонкий реекспорт (`export * from '../ui'`),
-щоб наявні сторінки не ламались. Нові екрани імпортують з `../ui`.
+Імпорт — тільки з `src/ui` (барелем `index.ts`). Старого реекспорту
+`src/components/ui.tsx` більше немає.
 
 ## Правила
 
@@ -32,11 +32,12 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 | `Sheet.tsx` | `Sheet` |
 | `Button.tsx` | `Btn`, `IconButton`, `ConfirmButton`, `FormActions` |
 | `Tabs.tsx` | `Tabs`, `Segmented` |
-| `Layout.tsx` | `Empty`, `SectionTitle`, `Card`, `ListRow`, `Stat` |
+| `Layout.tsx` | `Empty`, `SectionTitle`, `Card`, `Rows`, `ListRow`, `Stat` |
 | `Badge.tsx` | `Badge`, `Pill` |
 | `Form.tsx` | `Field`, `Input`, `Textarea`, `Select`, `MoneyInput`, `DateInput`, `Switch`, `fieldClass` |
 | `Optional.tsx` | `OptionalFields` |
 | `Menu.tsx` | `PropertyMenu`, `MenuOption` |
+| `Toast.tsx` | `Toaster`, `toast`, `dismissToast`, `Toast`, `ToastTone` |
 
 ---
 
@@ -63,8 +64,17 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 
 ### `Sheet`
 `{ open: boolean; onClose: () => void; title?: string; children }`.
-Нижній лист на телефоні, діалог по центру на десктопі. Esc і клік по підкладці закривають,
-скрол сторінки блокується. Використовувати для редагування однієї сутності.
+Нижній лист на телефоні, діалог по центру на десктопі. Esc і клік по підкладці закривають.
+Використовувати для редагування однієї сутності.
+
+- **Рендериться порталом у `body`.** Предок із `backdrop-filter` (sticky-хедер
+  `TopBar`) стає контейнером для `position: fixed`, і лист без порталу виїжджав
+  за верх екрана. Тож `Sheet` можна класти будь-де в дереві.
+- `role="dialog"`, `aria-modal`, `aria-labelledby` вказує на заголовок.
+- Фокус: при відкритті переходить у лист (якщо поле всередині вже не взяло його
+  через `autoFocus`), при закритті повертається на елемент, з якого відкрили.
+- Скрол `body` блокується лічильником відкритих листів на рівні модуля: закрили
+  один, а інший ще відкритий — скрол лишається заблокованим.
 
 ---
 
@@ -72,7 +82,8 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 
 ### `Btn`
 `{ children; onClick?; variant?: 'primary' | 'ghost' | 'quiet' | 'danger'; full?; disabled?; type? }`.
-`primary` — одна на екран. `danger` — єдине червоне місце.
+`primary` — одна на екран. `danger` — червоний текст для руйнівної дії без
+підтвердження; зазвичай замість нього беремо `ConfirmButton`.
 
 ### `IconButton`
 `{ children; label: string; onClick?; size?: number /* 32 */; tone?: 'quiet' | 'ghost' | 'accent' | 'danger'; disabled? }`.
@@ -82,6 +93,10 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 `{ children; confirmLabel?: string /* 'Точно?' */; onConfirm: () => void; full?; disabled?; variant?: 'danger' | 'quiet' }`.
 Видалення у два тапи без `window.confirm`: перший тап озброює, другий виконує,
 через 4 с або при втраті фокуса роззброюється.
+Кольори: у спокої `danger` — червоний текст (як `Btn danger`), `quiet` — сірий;
+озброєна кнопка — суцільний червоний фон (`bg-stop`) незалежно від `variant`.
+Тобто червоне — це руйнівні дії загалом (`Btn`/`IconButton` з `danger`,
+`ConfirmButton`), а не одна кнопка.
 
 ### `FormActions`
 `{ onSubmit?; onCancel?; submitLabel? /* 'Зберегти' */; cancelLabel? /* 'Скасувати' */; disabled?; destructive?: ReactNode }`.
@@ -123,6 +138,11 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 ### `Card`
 `{ children; className?; padded? /* true */ }` — `rounded-xl border border-line bg-surface p-4`.
 
+### `Rows`
+`{ children; className? }` — `ul`-обгортка списку: на телефоні на всю ширину
+з лініями зверху й знизу, на десктопі — картка з полями `sm:mx-6` і заокругленням.
+Рядки між собою розділені лінією. Діти — `ListRow` або `li`.
+
 ### `ListRow`
 `{ children; as?: 'li' | 'div'; onClick?; className? }` — рядок сталої висоти 44
 з полями екрана (`px-4 sm:px-6`). За замовчуванням `li`, всередині `ul`.
@@ -159,8 +179,12 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 можливості розкладені порожніми інпутами, читається як список обовʼязків:
 видно десять полів і незрозуміло, які з них твої.
 
-Поле показується, якщо `filled` або якщо його щойно додали; порожнє згортається
-назад. `render` отримує дію «прибрати» і віддає її в `Field onRemove`.
+Поле показується, якщо `filled` або якщо його додали кнопкою. **Щойно поле хоч раз
+було видимим, воно лишається до хрестика або до розмонтування форми** — навіть
+коли `filled` став false: людина стирає текст, щоб вписати заново, і поле не має
+зникнути разом із фокусом. Заповнені ключі компонент сам дописує у відкриті.
+`render` отримує дію «прибрати» (є лише коли передано `clear`) і віддає її
+в `Field onRemove`: вона скидає значення і згортає поле назад у кнопку.
 Обовʼязкові поля сюди не кладемо — назва, сума, конверт видимі завжди.
 
 ```tsx
@@ -204,6 +228,21 @@ import { Card, Field, MoneyInput, FormActions } from '../ui'
 Булеві поля: `active` регулярного платежу, `archived` конверта.
 `role="switch"` + `aria-checked`; підпис — частина кнопки, окремий `Field` не потрібен.
 
+
+---
+
+## Сповіщення
+
+### `Toaster` / `toast`
+`toast(text: string, opts?: { tone?: 'info' | 'warn'; action?: { label: string; run: () => void } }) → id`,
+`dismissToast(id)`. `Toaster` рендериться один раз в `App`.
+
+Слід оптимістичної дії: лист закрився, запис уже в списку, а тост каже, що
+саме сталося («Записано: 450 ₴ · Продукти»). Модульне сховище, а не контекст —
+`toast()` викликається з будь-якого місця, зокрема з `src/data/store.ts`.
+Живе 4 с, одночасно не більше трьох. `action` — одна дія на кшталт «Скасувати».
+Тони лише `info` і `warn`: червоного тосту немає, перевищення й прострочення
+бурштинові. Над таб-баром на телефоні, у правому нижньому куті на десктопі.
 
 ---
 

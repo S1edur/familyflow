@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import {
-  Avatar, Badge, Btn, Card, ConfirmButton, Field, FormActions, Icon, Input,
+  Avatar, Badge, Card, ConfirmButton, Field, FormActions, Icon, Input,
   Pill, SectionTitle, Sheet, Rows,
 } from '../ui'
-import { useDB, setMe, updateMember, setRates, resetAll } from '../data/store'
+import { useDB, setMe, updateMember, setRates, resetAll, isBound } from '../data/store'
 import type { Member } from '../data/types'
 import { money } from '../lib/money'
 
@@ -16,14 +16,11 @@ const HEX = /^#[0-9a-fA-F]{6}$/
 
 export default function SettingsFamily() {
   const db = useDB()
-  const [editing, setEditing] = useState<Member | 'new' | null>(null)
+  const [editing, setEditing] = useState<Member | null>(null)
   const me = db.members.find(m => m.id === db.meId)
 
   return (
     <div className="max-w-[760px] mx-auto pb-10">
-      <header className="px-4 pt-3 pb-3 sm:px-6">
-      </header>
-
       {/* ── хто зараз записує ── */}
       <SectionTitle>Зараз записує</SectionTitle>
       <div className="px-4 sm:px-6">
@@ -94,23 +91,34 @@ export default function SettingsFamily() {
       {/* ── дані ── */}
       <SectionTitle>Дані</SectionTitle>
       <div className="px-4 sm:px-6">
-        <Card>
-          <p className="text-[13.5px]">Скинути до стартових даних</p>
-          <p className="text-[12.5px] text-faint mt-1 leading-snug">
-            Зітре все: витрати, платежі, фонди, борги, задачі й покупки — і поставить
-            демонстраційний набір замість них. Скасувати це не вийде.
-          </p>
-          <div className="mt-3">
-            <ConfirmButton confirmLabel="Точно стерти все?" onConfirm={resetAll}>
-              {Icon.trash(16)} Скинути дані
-            </ConfirmButton>
-          </div>
-        </Card>
+        {/* У хмарному режимі скидання підставило б демо-дані з нечинними id поверх
+            дому в базі — синхронізація зламалась би, а самі дані в базі лишились. */}
+        {isBound() ? (
+          <Card>
+            <p className="text-[13.5px]">Дані дому живуть у базі</p>
+            <p className="text-[12.5px] text-faint mt-1 leading-snug">
+              Їх бачать і змінюють обидва учасники. Скидання до стартових даних доступне
+              лише в локальному режимі.
+            </p>
+          </Card>
+        ) : (
+          <Card>
+            <p className="text-[13.5px]">Скинути до стартових даних</p>
+            <p className="text-[12.5px] text-faint mt-1 leading-snug">
+              Зітре все: витрати, платежі, фонди, борги, задачі й покупки — і поставить
+              демонстраційний набір замість них. Скасувати це не вийде.
+            </p>
+            <div className="mt-3">
+              <ConfirmButton confirmLabel="Точно стерти все?" onConfirm={resetAll}>
+                {Icon.trash(16)} Скинути дані
+              </ConfirmButton>
+            </div>
+          </Card>
+        )}
       </div>
 
-      <Sheet open={editing !== null && editing !== 'new'} onClose={() => setEditing(null)}
-             title="Учасник">
-        {editing !== null && editing !== 'new' && (
+      <Sheet open={editing !== null} onClose={() => setEditing(null)} title="Учасник">
+        {editing !== null && (
           <MemberForm
             initial={editing}
             taken={db.members.map(m => m.color)}

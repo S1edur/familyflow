@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { Avatar, Icon, Toaster } from './components/ui'
+import { Avatar, Icon, Toaster } from './ui'
 import { QuickAdd } from './components/QuickAdd'
 import Welcome from './pages/Welcome'
 import Onboarding from './pages/Onboarding'
@@ -30,7 +30,8 @@ const NAV = [
 /**
  * Мобільний таб-бар: рівно пʼять пунктів, «Витрата» рівно в центрі.
  * Сім пунктів на 375px дають 53px на кожен — підписи не вміщуються,
- * тому Місяць і Фонди живуть у «Ще» та в боковій панелі на десктопі.
+ * тому Конверти, Платежі, Фонди, Борги й Історія живуть у «Ще» та в боковій
+ * панелі на десктопі.
  */
 const TABS = [
   { to: '/',         label: 'Сьогодні', icon: Icon.home },
@@ -38,6 +39,9 @@ const TABS = [
   { to: '/shopping', label: 'Покупки',  icon: Icon.cart },
   { to: '/settings', label: 'Ще',       icon: Icon.gear },
 ]
+
+/** Екрани, що відкриваються через «Ще»: на них підсвічуємо «Ще», інакше таб-бар порожній. */
+const MORE_PATHS = ['/envelopes', '/bills', '/funds', '/debts', '/history']
 
 const SECONDARY = [
   { to: '/debts',    label: 'Борги',        icon: Icon.list },
@@ -49,7 +53,9 @@ function Tab({ n, path, cart }: {
   n: { to: string; label: string; icon: (s?: number) => React.ReactNode }
   path: string; cart: number
 }) {
-  const active = n.to === '/' ? path === '/' : path.startsWith(n.to)
+  const active = n.to === '/' ? path === '/'
+    : n.to === '/settings' ? path.startsWith(n.to) || MORE_PATHS.some(p => path.startsWith(p))
+    : path.startsWith(n.to)
   return (
     <NavLink to={n.to} end={n.to === '/'}
       className={`flex flex-col items-center gap-0.5 py-2 text-[10.5px] ${active ? 'text-accent' : 'text-faint'}`}>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
@@ -148,14 +148,19 @@ export default function Debts() {
   const openEdit = (d: Debt) => setDebtParam(d.id)
   const close = () => setDebtParam(null)
 
-  // чернетку сіємо на зміну адреси, а не на кожен рендер
+  // Для якої адреси чернетку вже засіяно. Посилання може відкритись раніше,
+  // ніж борг зʼявиться в даних, — тоді сіємо, коли він знайдеться, але лише
+  // раз: наступні зміни бази не мають затирати те, що людина вже набрала.
+  const seeded = useRef<string | null>(null)
+  const found = editing !== null && editing !== 'new'
   useEffect(() => {
-    if (debtParam === null) return
-    if (debtParam === 'new') { setDraft(blank()); return }
+    if (debtParam === null) { seeded.current = null; return }
+    if (seeded.current === debtParam) return
+    if (debtParam === 'new') { setDraft(blank()); seeded.current = debtParam; return }
     const d = db.debts.find(x => x.id === debtParam)
-    if (d) setDraft(draftOf(d))
+    if (d) { setDraft(draftOf(d)); seeded.current = debtParam }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debtParam])
+  }, [debtParam, found])
 
   // внесення платежу
   const [payId, setPayId] = useState<string | null>(null)
@@ -371,15 +376,18 @@ export default function Debts() {
                 {sortedClosed.map(d => (
                   <Card key={d.id}>
                     <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
+                      {/* бейдж під назвою: у ряду з кнопками довга дата на 375px стискала назву до нуля */}
+                      <div className="flex-1 min-w-0">
                         <div className="text-[14px] truncate">{d.name}</div>
                         <div className="text-[12.5px] text-faint num truncate">
                           {money(d.principalMinor, d.currency)}
                           {d.counterparty ? ` · ${d.counterparty}` : ''}
                         </div>
+                        <div className="mt-1">
+                          <Badge tone="accent">закрито {d.closedOn ? longDate(d.closedOn) : ''}</Badge>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <Badge tone="accent">закрито {d.closedOn ? longDate(d.closedOn) : ''}</Badge>
                         <IconButton label="Змінити борг" onClick={() => openEdit(d)}>{Icon.pencil(16)}</IconButton>
                         <Btn variant="quiet" onClick={() => reopenDebt(d.id)}>Повернути</Btn>
                       </div>

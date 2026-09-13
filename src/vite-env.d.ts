@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string
   /** стара назва того самого ключа, до перейменування в Supabase */
   readonly VITE_SUPABASE_ANON_KEY?: string
+  /** публічна половина VAPID-пари для пушів; приватна живе лише у Vercel */
+  readonly VITE_VAPID_PUBLIC_KEY?: string
 }
 
 interface ImportMeta {

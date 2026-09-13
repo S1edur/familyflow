@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AttachButton, Badge, Btn, Card, ConfirmButton, DateInput, Empty, Field, FormActions,
@@ -100,23 +100,32 @@ export default function Funds() {
   // лист редагування живе в адресі: ?fund=new або ?fund=<id>
   const [fundParam, setFundParam] = useSheet('fund')
   const [envParam] = useSheet('env')
-  const editId = fundParam === 'new' ? '' : fundParam
+  const isNew = fundParam === 'new'
+  // Невідомий id — не «новий фонд»: інакше посилання, відкрите до завантаження
+  // даних (або на видалений фонд), показувало б порожню форму, і «Зберегти»
+  // створювало б дубль. Такий лист просто чекає, поки фонд зʼявиться.
+  const editing = fundParam && !isNew ? db.funds.find(f => f.id === fundParam) : undefined
+  const sheetOpen = isNew || !!editing
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+  // для якої адреси чернетку вже засіяно — щоб не затерти те, що людина набрала
+  const seeded = useRef<string | null>(null)
 
-  // Чернетку сіємо, коли змінилась адреса, а не при кожному рендері:
-  // інакше друге натискання клавіші затирало б перше.
+  // Чернетку сіємо, коли змінилась адреса або коли фонд нарешті знайшовся,
+  // а не при кожному рендері: інакше друге натискання клавіші затирало б перше.
   useEffect(() => {
-    if (fundParam === null) return
-    if (fundParam === 'new') {
+    if (fundParam === null) { seeded.current = null; return }
+    const key = `${fundParam}|${envParam ?? ''}`
+    if (seeded.current === key) return
+    if (isNew) {
       // прийшли з конверта — фонд уже знає, куди слати нагадування
       setDraft({ ...emptyDraft(), envelopeId: envParam ?? '' })
+      seeded.current = key
       return
     }
-    const f = db.funds.find(x => x.id === fundParam)
-    if (f) setDraft(draftOf(f))
-    // db навмисно не в залежностях: чернетка не має перезаписуватись від змін бази
+    if (editing) { setDraft(draftOf(editing)); seeded.current = key }
+    // editing навмисно лише як «знайшовся/ні»: чернетка не має перезаписуватись від змін бази
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fundParam, envParam])
+  }, [fundParam, envParam, !!editing])
 
   // лист внесення / витрати
   const [moveId, setMoveId] = useState<string | null>(null)
@@ -143,7 +152,6 @@ export default function Funds() {
   const openEdit = (f: Fund) => setFundParam(f.id)
   const closeEdit = () => setFundParam(null, { env: null })
 
-  const editing = editId ? db.funds.find(f => f.id === editId) : undefined
   const balance = editing ? fundBalance(db, editing.id) : 0
   const preview = previewOf(draft, balance)
 
@@ -169,7 +177,7 @@ export default function Funds() {
       contributionDay: draft.envelopeId ? draft.contributionDay : undefined,
     }
     if (editing) updateFund(editing.id, shape)
-    else addFund(shape)
+    else if (isNew) addFund(shape)
     closeEdit()
   }
 
@@ -313,7 +321,7 @@ export default function Funds() {
       </Sheet>
 
       {/* ── створення і редагування ── */}
-      <Sheet open={editId !== null} onClose={closeEdit} title={editing ? editing.name : 'Новий фонд'}>
+      <Sheet open={sheetOpen} onClose={closeEdit} title={editing ? editing.name : 'Новий фонд'}>
         <Field label="Назва" htmlFor="fund-name">
           <Input id="fund-name" value={draft.name} onChange={v => set('name', v)}
                  placeholder="Страховка авто" autoFocus={!editing} onEnter={save} />

@@ -12,7 +12,7 @@
  * `RecurringPlan.fundId`, `Occurrence.fundId`.
  */
 import type { Currency, DB, Fund, ID, RecurringPlan } from './types'
-import { debtEnvelopeId, debtStatus, fundStatus } from './store'
+import { debtEnvelopeId, debtStatus, fundStatus, paidBaseByOccurrence } from './store'
 import { clampDayOfMonth, iso, isoDow, longDate, monthKey, parse, today } from '../lib/dates'
 import { toBase } from '../lib/money'
 
@@ -163,11 +163,12 @@ export function envelopeSources(d: DB, envelopeId: ID): Link[] {
  */
 export function envelopeAsk(d: DB, envelopeId: ID, month: string) {
   let open = 0, paid = 0
+  const paidBase = paidBaseByOccurrence(d)
   for (const o of d.occurrences) {
     if (o.envelopeId !== envelopeId || monthKey(o.dueDate) !== month) continue
-    const base = toBase(o.actualMinor ?? o.expectedMinor, o.currency, d.rates)
-    if (o.status === 'paid') paid += base
-    else if (o.status === 'due' || o.status === 'projected') open += base
+    // оплачене — із замороженим курсом запису, очікуване — за сьогоднішнім
+    if (o.status === 'paid') paid += paidBase.get(o.id) ?? toBase(o.actualMinor ?? o.expectedMinor, o.currency, d.rates)
+    else if (o.status === 'due' || o.status === 'projected') open += toBase(o.expectedMinor, o.currency, d.rates)
   }
   return { open, paid, auto: open + paid }
 }
@@ -225,13 +226,4 @@ export function debtLinks(d: DB, debtId: ID): Link[] {
   }
 
   return out
-}
-
-/** Найближчий автоматичний платіж по конверту — для підказки «наступне». */
-export function nextForEnvelope(d: DB, envelopeId: ID) {
-  const t = today()
-  return d.occurrences
-    .filter(o => o.envelopeId === envelopeId && o.dueDate >= t
-      && (o.status === 'due' || o.status === 'projected'))
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
 }

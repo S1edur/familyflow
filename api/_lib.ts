@@ -85,6 +85,11 @@ export async function once(key: string): Promise<boolean> {
   throw new Error(error.message)
 }
 
+/** Надіслати не вдалося — звільняємо ключ, щоб наступна спроба не вважала це зробленим. */
+export async function release(key: string): Promise<void> {
+  await admin().from('push_log').delete().eq('key', key)
+}
+
 export const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 

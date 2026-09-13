@@ -9,12 +9,10 @@ import { MonthBar, useMonth } from '../components/MonthBar'
 import {
   useDB, envelopeMonth, monthSummary, setPlanned,
   addEnvelope, updateEnvelope, archiveEnvelope, reorderEnvelope, updateFund,
-  fundStatus,
 } from '../data/store'
 import { envelopeAsk, envelopeSources, newRuleRoute, unlinkedFunds } from '../data/links'
 import { hasIncome } from '../data/setup'
 import { money, parseAmount } from '../lib/money'
-import { monthKey, today } from '../lib/dates'
 import type { DB, Envelope, EnvelopeKind, ID } from '../data/types'
 
 /* ═══════════════════ конверти: довідники і похідне ═══════════════════ */
@@ -241,12 +239,17 @@ function PlanTab({ db, month }: { db: DB; month: string }) {
           {showArchived && (
             <Rows>
               {archived.map(e => (
-                <ListRow key={e.id} onClick={() => setEditing(e)}>
-                  <span className="flex-1 truncate text-[14px] text-muted">{e.name}</span>
+                // Рядок сам не клікається: кнопка всередині role="button" ловила б
+                // Enter рядка й відкривала лист замість «Повернути».
+                <ListRow key={e.id}>
+                  <button type="button" onClick={() => setEditing(e)}
+                    className="flex-1 min-w-0 text-left truncate text-[14px] text-muted hover:text-ink">
+                    {e.name}
+                  </button>
                   <span className="text-[12px] num text-faint shrink-0" title={usageTitle(usageOf(db, e.id))}>
                     {usageLabel(usageOf(db, e.id))}
                   </span>
-                  <span className="shrink-0" onClick={ev => ev.stopPropagation()}>
+                  <span className="shrink-0">
                     <Btn variant="quiet" onClick={() => archiveEnvelope(e.id, false)}>Повернути</Btn>
                   </span>
                 </ListRow>
@@ -344,15 +347,33 @@ function PlanRow({ env, planned, actual, auto, sources, ownerName, reordering, o
   )
 }
 
+/**
+ * План конверта. Поза фокусом — число з розрядами, як скрізь; у фокусі —
+ * сирий рядок, щоб пробіли розрядів не заважали набирати.
+ * Порожнє або нуль — свідомо «без плану»; сміття не має мовчки обнуляти план,
+ * тож невалідний ввід просто повертає попереднє значення.
+ */
 function PlanInput({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
   const [raw, setRaw] = useState<string | null>(null)
-  const shown = raw ?? (value ? String(value / 100) : '')
+  const shown = raw ?? (value ? money(value).replace(/\s*₴$/, '') : '')
+  const commit = () => {
+    if (raw === null) return
+    const cleared = /^[\s0.,]*$/.test(raw)
+    const parsed = cleared ? 0 : parseAmount(raw)
+    if (parsed !== null && parsed !== value) onCommit(parsed)
+    setRaw(null)
+  }
   return (
     <input
       value={shown}
       onChange={e => setRaw(e.target.value)}
-      onFocus={e => e.currentTarget.select()}
-      onBlur={() => { if (raw !== null) { onCommit(parseAmount(raw) ?? 0); setRaw(null) } }}
+      onFocus={e => {
+        const el = e.currentTarget
+        setRaw(value ? String(value / 100).replace('.', ',') : '')
+        // значення підміняється після фокуса — виділяємо вже сирий рядок
+        requestAnimationFrame(() => el.select())
+      }}
+      onBlur={commit}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       inputMode="decimal" placeholder="—" aria-label="План на місяць"
       className="w-[92px] h-8 px-2 text-right text-[13px] num rounded-md border border-transparent hover:border-line focus:border-accent bg-transparent outline-none"

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { AttachButton } from './Links'
 
 /**
@@ -8,9 +8,11 @@ import { AttachButton } from './Links'
  * обовʼязків: людина бачить десять інпутів і не розуміє, які з них треба їй.
  * Тому порожнє необовʼязкове поле — це не поле, а кнопка «додати».
  *
- * Правило: поле показується, якщо в ньому щось є (`filled`) або його щойно
- * додали. Порожні згортаються назад у кнопки. Заповнене поле можна прибрати
- * хрестиком — `render` отримує цю дію і віддає її в `Field onRemove`.
+ * Правило: поле показується, якщо в ньому щось є (`filled`) або його додали.
+ * Щойно поле стало видимим, воно лишається до хрестика або до розмонтування
+ * форми — навіть коли текст стерли, щоб вписати заново: інакше поле зникло б
+ * разом із фокусом посеред набору. Хрестик — `render` отримує цю дію і віддає
+ * її в `Field onRemove`.
  *
  * Обовʼязкові поля сюди не кладемо: назва, сума, конверт — це те, без чого
  * сутність не існує, вони завжди видимі.
@@ -31,6 +33,15 @@ export function OptionalFields({ items, label = 'Додати' }: {
   label?: string
 }) {
   const [open, setOpen] = useState<string[]>([])
+
+  // Заповнене поле запамʼятовуємо як відкрите: коли його очистять, `filled`
+  // стане false, але поле має лишитись на місці.
+  const filledKeys = items.filter(i => i.filled).map(i => i.key).join('\n')
+  useEffect(() => {
+    if (!filledKeys) return
+    const keys = filledKeys.split('\n')
+    setOpen(o => (keys.every(k => o.includes(k)) ? o : [...o, ...keys.filter(k => !o.includes(k))]))
+  }, [filledKeys])
 
   const hide = (it: OptionalItem) => {
     it.clear?.()

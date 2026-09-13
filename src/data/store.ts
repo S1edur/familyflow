@@ -9,7 +9,8 @@ import {
   addDays, clampDayOfMonth, iso, isoDow, monthKey, monthsUntil, parse, relativeDue, today,
 } from '../lib/dates'
 import { money, toBase } from '../lib/money'
-import { pullAll, pullRates, pushDiff, pushMembers, pushRates, watchHousehold } from './sync'
+import { SyncError, pullAll, pullRates, pushDiff, pushMembers, pushRates, watchHousehold } from './sync'
+import { toast } from '../ui/Toast'
 import { drop, enqueue, peek, queueSize, clearQueue } from './queue'
 
 const KEY = 'familyflow.v1'
@@ -48,13 +49,18 @@ function push(before: DB) {
 /**
  * Спорожнює чергу по одному, СТРОГО по порядку: пізніша зміна може
  * спиратись на ранішу, тож паралельна відправка переплутала б їх.
- * Перший невдалий елемент зупиняє прохід — решта чекає наступної спроби.
+ *
+ * Збій мережі зупиняє прохід — решта чекає наступної спроби. Відмова бази
+ * (обмеження, права, кривий id) — ні: повтор нічого не дасть, а застрягла
+ * зміна назавжди заблокувала б усі наступні й зміни партнера теж. Таку
+ * викидаємо, кажемо про це людині й підтягуємо стан із бази.
  */
 export async function drain(): Promise<void> {
   if (draining || !householdId) return
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return
   draining = true
   const h = householdId
+  let rejected = false
   try {
     for (let item = peek(); item; item = peek()) {
       try {
@@ -65,6 +71,12 @@ export async function drain(): Promise<void> {
         lastPushError = ''
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
+        if (e instanceof SyncError && e.permanent) {
+          console.error('База відхилила зміну, прибираю з черги:', msg)
+          drop(item.id)
+          rejected = true
+          continue
+        }
         if (msg !== lastPushError) {
           lastPushError = msg
           console.error(`Зміни чекають на відправку (${queueSize()}):`, msg)
@@ -75,13 +87,27 @@ export async function drain(): Promise<void> {
   } finally {
     draining = false
   }
+  if (rejected) {
+    toast('Одну зміну не вдалося зберегти — показую, як записано в базі', { tone: 'warn' })
+    void refresh(h)
+  }
 }
 
+let lastRefresh = 0
+
 if (typeof window !== 'undefined') {
-  // мережа повернулась або вкладку знову побачили — пробуємо ще раз
-  window.addEventListener('online', () => void drain())
+  // Мережа повернулась або вкладку знову побачили: віддати своє і взяти чуже.
+  // Realtime за час сну телефона події губить, тож без цього перетягування
+  // застарілий пристрій працював би поверх старого стану.
+  const wake = () => {
+    if (!householdId) return
+    if (Date.now() - lastRefresh < 15_000) { void drain(); return }
+    lastRefresh = Date.now()
+    void refresh(householdId)
+  }
+  window.addEventListener('online', wake)
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void drain()
+    if (document.visibilityState === 'visible') wake()
   })
 }
 
@@ -96,16 +122,6 @@ export function mutate(fn: (d: DB) => void) {
 
 const BOUND_KEY = 'ff.boundTo'
 
-/**
- * Привʼязати сховище до справжнього дому.
- *
- * Якщо браузер ще не бачив цього дому — демо-дані стираються начисто.
- * Інакше сідові витрати й задачі змішались би зі справжніми, і потім
- * не розібрати, де що. Користувач починає з порожнього, як і домовились:
- * шаблон — це конверти, створені разом із домом у базі.
- *
- * Той самий механізм спрацьовує при зміні акаунта: інший дім — інші дані.
- */
 let unwatch: (() => void) | null = null
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -120,11 +136,27 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 async function refresh(id: ID) {
   await drain()
   if (queueSize() > 0) return          // щось не доїхало — не затираємо себе
-  const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
-  db = materialize({ ...db, ...cloud, rates: { ...db.rates, ...rates } })
-  emit()
+  if (householdId !== id) return       // поки тягнули, змінився дім
+  try {
+    const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
+    db = materialize({ ...db, ...cloud, rates: { ...db.rates, ...rates } })
+    emit()
+  } catch (e) {
+    // не вийшло — лишаємось на тому, що є; наступне пробудження спробує знову
+    console.error('Не вдалось оновити дані з бази:', e instanceof Error ? e.message : e)
+  }
 }
 
+/**
+ * Привʼязати сховище до справжнього дому.
+ *
+ * Якщо браузер ще не бачив цього дому — демо-дані стираються начисто.
+ * Інакше сідові витрати й задачі змішались би зі справжніми, і потім
+ * не розібрати, де що. Користувач починає з порожнього, як і домовились:
+ * шаблон — це конверти, створені разом із домом у базі.
+ *
+ * Той самий механізм спрацьовує при зміні акаунта: інший дім — інші дані.
+ */
 export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   let bound: string | null = null
   try { bound = localStorage.getItem(BOUND_KEY) } catch { /* приватний режим */ }
@@ -139,6 +171,17 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   // Спершу віддати те, що не доїхало минулої сесії. Інакше перетягування
   // затерло б власні зміни, які просто чекали в черзі на мережу.
   householdId = id
+
+  // Підписка — ДО першого перетягування: якщо воно впаде, зміни партнера
+  // однаково розбудять refresh, і дані підтягнуться, щойно мережа оживе.
+  // Події збираємо в пачку: одна дія партнера — це кілька рядків у кількох
+  // таблицях, і тягнути на кожен означало б десяток запитів замість одного.
+  unwatch?.()
+  unwatch = watchHousehold(id, () => {
+    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(() => { void refresh(id) }, 400)
+  })
+
   await drain()
 
   const [cloud, rates] = await Promise.all([pullAll(id), pullRates()])
@@ -151,21 +194,24 @@ export async function bindHousehold(id: ID, members: Member[], meId: ID) {
   db = withGenerated
   emit()
 
-  // Зміни партнера приходять самі. Події збираємо в пачку: одна дія
-  // партнера — це кілька рядків у кількох таблицях, і тягнути на кожен
-  // означало б десяток запитів замість одного.
-  unwatch?.()
-  unwatch = watchHousehold(id, () => {
-    if (refreshTimer) clearTimeout(refreshTimer)
-    refreshTimer = setTimeout(() => { void refresh(id) }, 400)
-  })
+  lastRefresh = Date.now()
 
-  await pushDiff(pulled, withGenerated, id).catch((e: unknown) => {
-    console.error('Не вдалось відправити згенероване:', e instanceof Error ? e.message : e)
-  })
+  // Згенероване — через чергу, як будь-яка зміна: з повтором при збої мережі
+  // і з відсіюванням того, що база відхилить.
+  enqueue(pulled, withGenerated)
+  void drain()
 }
 
+/** Сховище привʼязане до дому в Supabase. */
+export const isBound = () => householdId !== null
+
+/**
+ * Демо-дані заново — лише в локальному режимі. У привʼязаному домі seed
+ * приніс би id на кшталт «e0», які база відхиляє як нечинні uuid, а справжні
+ * дані в базі однаково лишились би.
+ */
 export function resetAll() {
+  if (householdId) return
   db = materialize(seed())
   emit()
 }
@@ -178,7 +224,6 @@ export function useDB(): DB {
   )
 }
 
-export const getDB = () => db
 // function declaration, а не const: викликається з materialize() ще до цього рядка
 /**
  * Стабільний ідентифікатор для того, що ГЕНЕРУЄТЬСЯ, а не створюється людиною.
@@ -285,7 +330,10 @@ function materialize(d: DB): DB {
       // рівно ОДИН відкритий екземпляр → прострочення не накопичуються
       const open = d.tasks.some(x => x.templateId === tpl.id && x.status !== 'done' && x.status !== 'dropped')
       if (!open) {
-        const due = addDays(tpl.lastCompletedAt?.slice(0, 10) ?? t, tpl.intervalDays ?? 7)
+        // день виконання — за місцевим календарем: slice(0, 10) дав би дату в UTC,
+        // і виконане між північчю й третьою ночі за Києвом зсунулось би на день назад
+        const done = tpl.lastCompletedAt ? iso(new Date(tpl.lastCompletedAt)) : t
+        const due = addDays(done, tpl.intervalDays ?? 7)
         pushTask(d, tpl.id, due, tpl, who, taskKeys)
       }
     } else {
@@ -309,7 +357,7 @@ function pushTask(d: DB, templateId: ID, due: string, tpl: DB['taskTemplates'][n
 }
 
 /** Вага походу в тій самій шкалі 1–3, що й effort задачі. Похідна з кількості позицій. */
-export function tripWeight(d: DB, tripId: ID): 1 | 2 | 3 {
+function tripWeight(d: DB, tripId: ID): 1 | 2 | 3 {
   const n = d.shoppingItems.filter(i => i.tripId === tripId).length
   return n >= 13 ? 3 : n >= 5 ? 2 : 1
 }
@@ -458,6 +506,16 @@ export function debtStatus(d: DB, debtId: ID) {
   return { debt, paid, remaining, progress, payoff }
 }
 
+/** Сума підтвердження кожного оплаченого платежу в базовій валюті, із замороженим курсом. */
+export function paidBaseByOccurrence(d: DB): Map<ID, number> {
+  const m = new Map<ID, number>()
+  for (const e of d.entries) {
+    // fund_out — парний запис до того самого платежу, не друга оплата
+    if (e.occurrenceId && e.kind !== 'fund_out') m.set(e.occurrenceId, e.amountBaseMinor)
+  }
+  return m
+}
+
 export function monthSummary(d: DB, month: string) {
   const income = d.entries
     .filter(e => e.kind === 'income' && monthKey(e.occurredOn) === month)
@@ -486,9 +544,14 @@ export function monthSummary(d: DB, month: string) {
 
   // у «вільно» входять і вже оплачені: гроші пішли з рахунку, і рівняння
   // не має про це забувати, інакше підтвердження платежу ЗБІЛЬШУЄ вільне
+  // Оплачене — це вже факт: беремо суму із запису, заморожену в момент оплати
+  // (інваріант 2). Сьогоднішній курс тут переписав би минулі місяці.
+  const paidBase = paidBaseByOccurrence(d)
   const obligationsAll = monthOccurrences
     .filter(o => o.status !== 'skipped')
-    .reduce((s, o) => s + base(o.status === 'paid' ? (o.actualMinor ?? o.expectedMinor) : o.expectedMinor, o.currency), 0)
+    .reduce((s, o) => s + (o.status === 'paid'
+      ? paidBase.get(o.id) ?? base(o.actualMinor ?? o.expectedMinor, o.currency)
+      : base(o.expectedMinor, o.currency)), 0)
 
   // Фонди з конвертом уже породили платежі й сидять в obligationsAll —
   // рахувати їх ще й тут означало б відняти двічі. Окремим рядком лишаються
@@ -639,7 +702,16 @@ export function notices(d: DB, since: string): { fresh: Notice[]; soon: Notice[]
 
 /* ───────────────────────── дії ───────────────────────── */
 
-export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string) {
+/**
+ * Підтвердити платіж. `false` — нічого не записано: платежу немає, він уже
+ * оплачений, або суми немає (правило зі змінною сумою ще без жодної оплати).
+ * Запис на 0 база відхиляє (amount_minor > 0), і одна така зміна зупинила б
+ * відправку всієї черги — тож інтерфейс має спитати суму.
+ */
+export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string): boolean {
+  const o0 = db.occurrences.find(x => x.id === id)
+  if (!o0 || o0.status === 'paid') return false
+  if ((amountMinor ?? o0.expectedMinor) <= 0) return false
   mutate(d => {
     const o = d.occurrences.find(x => x.id === id)
     if (!o || o.status === 'paid') return
@@ -683,7 +755,6 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
       // Без цього страховка, оплачена в лютому, назавжди лишає фонду лютневу
       // дату: monthsUntil затискається в 1, і фонд щомісяця вимагає весь
       // залишок цілі, а «відстаємо» не згасає ніколи.
-      // sql/ робить те саме через funds.on_payout = 'refill'.
       const fund = d.funds.find(x => x.id === plan.fundId)
       if (fund?.dueDate) {
         // Рахуємо з РОЗКЛАДУ, а не з уже згенерованих платежів: горизонт
@@ -708,6 +779,7 @@ export function confirmOccurrence(id: ID, amountMinor?: number, paidOn?: string)
       }
     }
   })
+  return true
 }
 
 /** Платіж у дохідний конверт — це надходження: «Отримано», а не «Оплачено». */
@@ -767,7 +839,9 @@ export function updateTask(id: ID, patch: Partial<Task>) {
   const before = db.tasks.find(x => x.id === id)
   mutate(d => {
     const t = d.tasks.find(x => x.id === id)
-    if (t) Object.assign(t, patch)
+    if (!t) return
+    Object.assign(t, patch)
+    if (patch.status === 'dropped') skipRound(d, t)
   })
   const to = patch.assigneeId
   if (before && to && to !== before.assigneeId && to !== db.meId) {
@@ -781,6 +855,17 @@ export function completeTask(id: ID) {
     if (!t) return
     if (t.status === 'done') {
       t.status = 'todo'; t.completedAt = undefined; t.completedBy = undefined
+      // Виконання «після попереднього» вже породило наступний екземпляр.
+      // Скасували виконання — наступний має зникнути, інакше відкритих стає
+      // два (інваріант 9), а відлік має піти від попереднього виконання.
+      const tpl = t.templateId ? d.taskTemplates.find(x => x.id === t.templateId) : undefined
+      if (tpl?.scheduleKind === 'after_completion') {
+        d.tasks = d.tasks.filter(x => x.id === t.id || x.templateId !== tpl.id
+          || x.status === 'done' || x.status === 'dropped')
+        tpl.lastCompletedAt = d.tasks
+          .filter(x => x.templateId === tpl.id && x.status === 'done' && x.completedAt)
+          .map(x => x.completedAt!).sort().pop()
+      }
       return
     }
     t.status = 'done'
@@ -850,14 +935,6 @@ export function setMe(id: ID) {
   mutate(d => { if (d.members.some(m => m.id === id)) d.meId = id })
 }
 
-export function addMember(input: { name: string; color: string; initials?: string }) {
-  mutate(d => {
-    d.members.push({
-      id: uid(), name: input.name, color: input.color,
-      initials: input.initials || input.name.slice(0, 1).toUpperCase(),
-    })
-  })
-}
 
 export function updateMember(id: ID, patch: Partial<Member>) {
   mutate(d => { const m = d.members.find(x => x.id === id); if (m) Object.assign(m, patch) })
@@ -1023,15 +1100,28 @@ export function updateEntry(id: ID, patch: Partial<{
   mutate(d => {
     const e = d.entries.find(x => x.id === id)
     if (!e) return
+    const currencyChanged = patch.currency != null && patch.currency !== e.currency
     Object.assign(e, patch)
-    if (patch.amountMinor != null || patch.currency != null) {
-      e.rateToBase = e.currency === 'UAH' ? 1 : d.rates[e.currency]
+    // Курс перезаморожуємо лише зі зміною валюти: виправлена сума — це та сама
+    // подія того самого дня, і курс її дня лишається її курсом (інваріант 2).
+    if (currencyChanged) e.rateToBase = e.currency === 'UAH' ? 1 : d.rates[e.currency]
+    if (patch.amountMinor != null || currencyChanged) {
       e.amountBaseMinor = Math.round(e.amountMinor * e.rateToBase)
     }
-    // запис належить платежу → тримаємо факт по платежу в синхроні
-    if (e.occurrenceId && e.kind === 'expense') {
+    // Запис підтверджує платіж → факт платежу й парне списання з фонду
+    // йдуть за ним. Інакше витрата змінилась, а фонд списав стару суму.
+    if (e.occurrenceId && e.kind !== 'fund_out') {
       const o = d.occurrences.find(x => x.id === e.occurrenceId)
-      if (o) o.actualMinor = e.amountMinor
+      if (o) {
+        o.actualMinor = e.amountMinor
+        if (patch.occurredOn) o.paidOn = patch.occurredOn
+      }
+      for (const pair of d.entries) {
+        if (pair.occurrenceId !== e.occurrenceId || pair.kind !== 'fund_out') continue
+        pair.amountMinor = e.amountMinor; pair.currency = e.currency
+        pair.rateToBase = e.rateToBase; pair.amountBaseMinor = e.amountBaseMinor
+        if (patch.occurredOn) pair.occurredOn = patch.occurredOn
+      }
     }
   })
 }
@@ -1083,12 +1173,6 @@ export function unconfirmOccurrence(id: ID) {
   })
 }
 
-export function unskipOccurrence(id: ID) {
-  mutate(d => {
-    const o = d.occurrences.find(x => x.id === id)
-    if (o && o.status === 'skipped') o.status = o.dueDate <= today() ? 'due' : 'projected'
-  })
-}
 
 /* ═══════════════════ покупки: правка ═══════════════════ */
 
@@ -1099,5 +1183,28 @@ export function updateShoppingItem(id: ID, patch: Partial<{ name: string; qty: s
 /* ═══════════════════ задачі: справжнє видалення ═══════════════════ */
 
 export function deleteTask(id: ID) {
-  mutate(d => { d.tasks = d.tasks.filter(t => t.id !== id && t.parentId !== id) })
+  mutate(d => {
+    const t = d.tasks.find(x => x.id === id)
+    // Екземпляр повторюваної задачі фізично не видаляємо: materialize() у ту
+    // саму мить згенерував би його знову з тим самим id. «Видалити цей раз» —
+    // це прибрати його, і ключ дати лишається зайнятим.
+    if (t?.templateId) {
+      t.status = 'dropped'
+      skipRound(d, t)
+      d.tasks = d.tasks.filter(x => x.parentId !== id)
+      return
+    }
+    d.tasks = d.tasks.filter(x => x.id !== id && x.parentId !== id)
+  })
+}
+
+/**
+ * Прибраний екземпляр задачі «через N днів після виконання» — це пропущений
+ * раз, а не кінець шаблону. Без цього наступна дата збігалась би з датою
+ * прибраного екземпляра, її ключ зайнятий, і шаблон більше ніколи нічого
+ * не створив би.
+ */
+function skipRound(d: DB, t: Task) {
+  const tpl = t.templateId ? d.taskTemplates.find(x => x.id === t.templateId) : undefined
+  if (tpl?.scheduleKind === 'after_completion') tpl.lastCompletedAt = new Date().toISOString()
 }

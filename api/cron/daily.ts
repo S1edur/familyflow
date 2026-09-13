@@ -9,9 +9,9 @@
  *   - лише СВОЄ: призначене мені або нічиє. Про чуже прострочене не пишемо;
  *   - без сорому: «чекають», а не «прострочено».
  */
-import { admin, json, kyivDate, money, once, plural, sendTo } from '../_lib.js'
+import { admin, json, kyivDate, money, once, plural, release, sendTo } from '../_lib.js'
 
-interface Bill { name: string; expected_amount_minor: number; currency: string; due_date: string }
+interface Bill { name: string; envelope_id: string; expected_amount_minor: number; currency: string; due_date: string }
 interface Todo { title: string; defer_until: string | null }
 
 export async function GET(request: Request): Promise<Response> {
@@ -36,9 +36,9 @@ export async function GET(request: Request): Promise<Response> {
       if (!member) continue
       const hh = member.household_id as string
 
-      const [{ data: bills }, { data: todos }] = await Promise.all([
+      const [{ data: bills }, { data: todos }, { data: incomeEnv }] = await Promise.all([
         db.from('occurrences')
-          .select('name, expected_amount_minor, currency, due_date')
+          .select('name, envelope_id, expected_amount_minor, currency, due_date')
           .eq('household_id', hh).is('deleted_at', null)
           .in('status', ['due', 'projected'])
           .lte('due_date', tomorrow)
@@ -51,13 +51,17 @@ export async function GET(request: Request): Promise<Response> {
           .lte('due_date', today)
           .or(`assignee_id.eq.${p},assignee_id.is.null`)
           .order('due_date'),
-      ]) as [{ data: Bill[] | null }, { data: Todo[] | null }]
+        db.from('envelopes').select('id').eq('household_id', hh).eq('kind', 'income'),
+      ]) as [{ data: Bill[] | null }, { data: Todo[] | null }, { data: { id: string }[] | null }]
 
-      const b = bills ?? []
+      // очікувана зарплата — не справа, яку треба зробити
+      const income = new Set((incomeEnv ?? []).map(e => e.id))
+      const b = (bills ?? []).filter(x => !income.has(x.envelope_id))
       // відкладене до майбутньої дати людина свідомо прибрала з очей
       const t = (todos ?? []).filter(x => !x.defer_until || x.defer_until <= today)
       if (!b.length && !t.length) continue
-      if (!await once(`daily:${p}:${today}`)) continue
+      const key = `daily:${p}:${today}`
+      if (!await once(key)) continue
 
       const parts: string[] = []
       if (b.length) parts.push(`${b.length} ${plural(b.length, 'платіж', 'платежі', 'платежів')}`)
@@ -69,12 +73,14 @@ export async function GET(request: Request): Promise<Response> {
       ]
       const more = b.length + t.length - lines.length
 
-      sent += await sendTo([p], {
+      const n = await sendTo([p], {
         title: `Чекають: ${parts.join(' і ')}`,
         body: lines.join(' · ') + (more > 0 ? ` · ще ${more}` : ''),
         url: b.length ? '/#/bills' : '/#/tasks',
         tag: 'daily',
       })
+      if (n === 0) await release(key)   // жоден пристрій не прийняв — не рахуємо надісланим
+      sent += n
     }
 
     return json(200, { people: people.length, sent })

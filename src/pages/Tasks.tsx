@@ -7,13 +7,14 @@ import {
 } from '../ui'
 import {
   useDB, addTask, completeTask, updateTask, deleteTask, setPriority, setAssignee,
-  fairness, confirmOccurrence, skipOccurrence, shoppingPending,
+  fairness, skipOccurrence, shoppingPending,
   addTaskTemplate, updateTaskTemplate, removeTaskTemplate,
- isIncomeOccurrence} from '../data/store'
+} from '../data/store'
+import { AmountForm, BillRow, doneLabel, payBill } from '../components/BillRow'
 import { envelopeRoute, fundRoute, ruleRoute, ruleText } from '../data/links'
 import type { DB, ID, Occurrence, Priority, Task, TaskStatus, TaskTemplate } from '../data/types'
 import { money } from '../lib/money'
-import { addDays, relativeDue, shortDate, today } from '../lib/dates'
+import { addDays, relativeDue, shortDate, thisMonth, today } from '../lib/dates'
 import { readPinShopping, writePinShopping } from '../lib/prefs'
 
 type View = 'mine' | 'today' | 'all' | 'open'
@@ -44,7 +45,7 @@ type Item =
  * (TASK_HORIZON_DAYS) і стільки ж показує relativeDue() як «через N дн.»,
  * далі вона вже друкує голу дату — тобто це межа, до якої дата ще відчувається
  * як «скоро». «Всі» піднімає стелю до 31 дня: це рівно та довжина, за якою
- * стоїть окремий екран «Місяць» із повним чеклістом платежів.
+ * стоїть окремий екран «Платежі» з повним чеклістом місяця.
  */
 const BILL_DAYS_WORK = 7
 const BILL_DAYS_ALL = 31
@@ -68,6 +69,31 @@ const EFFORT_LABEL: Record<1 | 2 | 3, string> = { 1: 'Легка', 2: 'Сере�
 
 const openBill = (o: Occurrence) => o.status === 'due' || o.status === 'projected'
 
+const billHorizonFor = (view: View, t: string) =>
+  addDays(t, view === 'all' ? BILL_DAYS_ALL : BILL_DAYS_WORK)
+
+/** Чи видно задачу у вкладці. Одна функція і для списку, і для бейджа. */
+function showTask(x: Task, view: View, t: string, meId: ID) {
+  if (x.status === 'dropped') return false
+  if (x.deferUntil && x.deferUntil > t && x.status !== 'done') return false
+  // повторювані показуємо лише найближчі — решта живе у вкладці «Всі»
+  if (view !== 'all' && x.templateId && x.status !== 'done' && x.dueDate && x.dueDate > addDays(t, 2)) return false
+  if (view === 'mine') return x.assigneeId === meId || !x.assigneeId
+  if (view === 'today') return !!x.dueDate && x.dueDate <= t
+  if (view === 'open') return !x.assigneeId
+  return true
+}
+
+/** Чи видно відкритий платіж у вкладці — з урахуванням горизонту дат. */
+function showBill(o: Occurrence, view: View, t: string, meId: ID) {
+  if (!openBill(o)) return false
+  if (o.dueDate > billHorizonFor(view, t)) return false
+  if (view === 'mine') return o.assigneeId === meId || !o.assigneeId
+  if (view === 'today') return o.dueDate <= t
+  if (view === 'open') return !o.assigneeId
+  return true
+}
+
 export default function Tasks() {
   const db = useDB()
   const [view, setView] = useState<View>('mine')
@@ -85,47 +111,31 @@ export default function Tasks() {
   const draftRef = useRef<HTMLInputElement>(null)
 
   const t = today()
-  const billHorizon = view === 'all' ? addDays(t, BILL_DAYS_ALL) : addDays(t, BILL_DAYS_WORK)
+  const billHorizon = billHorizonFor(view, t)
 
-  const visible = useMemo(() => {
-    return db.tasks.filter(x => {
-      if (x.status === 'dropped') return false
-      if (x.deferUntil && x.deferUntil > t && x.status !== 'done') return false
-      // повторювані показуємо лише найближчі — решта живе у вкладці «Всі»
-      if (view !== 'all' && x.templateId && x.status !== 'done' && x.dueDate && x.dueDate > addDays(t, 2)) return false
-      if (view === 'mine') return x.assigneeId === db.meId || !x.assigneeId
-      if (view === 'today') return !!x.dueDate && x.dueDate <= t
-      if (view === 'open') return !x.assigneeId
-      return true
-    })
-  }, [db.tasks, view, db.meId, t])
+  const visible = useMemo(
+    () => db.tasks.filter(x => showTask(x, view, t, db.meId)),
+    [db.tasks, view, db.meId, t])
 
   // платежі — той самий фільтр вкладки, але зі своєю стелею по датах
-  const bills = useMemo(() => {
-    return db.occurrences.filter(o => {
-      if (!openBill(o)) return false
-      if (o.dueDate > billHorizon) return false
-      if (view === 'mine') return o.assigneeId === db.meId || !o.assigneeId
-      if (view === 'today') return o.dueDate <= t
-      if (view === 'open') return !o.assigneeId
-      return true
-    })
-  }, [db.occurrences, view, db.meId, t, billHorizon])
+  const bills = useMemo(
+    () => db.occurrences.filter(o => showBill(o, view, t, db.meId)),
+    [db.occurrences, view, db.meId, t])
 
   // скільки платежів лишилось за горизонтом — одним рядком, а не сотнею
   const beyond = db.occurrences.filter(o => openBill(o) && o.dueDate > billHorizon).length
 
+  // Бейдж рахується ТИМИ САМИМИ фільтрами, що й список під ним: інакше
+  // «Мої 16» над чотирнадцятьма рядками виглядає як загублені задачі.
+  // рядок походу в магазин стоїть у кожній вкладці — тож і в кожному бейджі
+  const hasShop = !!pending
   const counts = useMemo(() => {
-    const near = addDays(t, BILL_DAYS_WORK)
-    const mineBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= near && (o.assigneeId === db.meId || !o.assigneeId)).length
-    const todayBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= t).length
-    const openBills = db.occurrences.filter(o => openBill(o) && o.dueDate <= near && !o.assigneeId).length
-    return {
-      mine: db.tasks.filter(x => (x.assigneeId === db.meId || !x.assigneeId) && x.status !== 'done' && x.status !== 'dropped').length + mineBills,
-      today: db.tasks.filter(x => x.dueDate && x.dueDate <= t && x.status !== 'done').length + todayBills,
-      open: db.tasks.filter(x => !x.assigneeId && x.status !== 'done' && x.status !== 'dropped').length + openBills,
-    }
-  }, [db.tasks, db.occurrences, db.meId, t])
+    const count = (v: View) =>
+      db.tasks.filter(x => x.status !== 'done' && showTask(x, v, t, db.meId)).length
+      + db.occurrences.filter(o => showBill(o, v, t, db.meId)).length
+      + (hasShop ? 1 : 0)
+    return { mine: count('mine'), today: count('today'), open: count('open') }
+  }, [db.tasks, db.occurrences, db.meId, t, hasShop])
 
   // платежі живуть у «До виконання» — один список, а не друга секція поруч
   const itemsFor = (status: TaskStatus): Item[] => {
@@ -199,7 +209,7 @@ export default function Tasks() {
               {rows.map(it =>
                 it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
                 : it.kind === 'shop' ? <ShopRow key={it.id} item={it} pinned={pinned} onTogglePin={togglePin} />
-                : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
+                : <BillRow key={it.id} o={it.occ} compact onOpen={() => setBillId(it.id)} />)}
             </Rows>
           </section>
         )
@@ -208,7 +218,7 @@ export default function Tasks() {
       {beyond > 0 && (
         <div className="px-4 sm:px-6 mt-2 text-[12.5px] text-faint">
           Ще <span className="num">{beyond}</span> {plural(beyond, 'платіж', 'платежі', 'платежів')} далі —
-          {view === 'all' ? ' у розділі «Місяць».' : ' у вкладці «Всі».'}
+          {view === 'all' ? ' у розділі «Платежі».' : ' у вкладці «Всі».'}
         </div>
       )}
 
@@ -234,7 +244,7 @@ export default function Tasks() {
               {done.slice(0, 30).map(it =>
                 it.kind === 'task' ? <TaskRow key={it.id} task={it.task} onOpen={() => setOpenId(it.id)} />
                 : it.kind === 'shop' ? null
-                : <BillRow key={it.id} occ={it.occ} onOpen={() => setBillId(it.id)} />)}
+                : <BillRow key={it.id} o={it.occ} compact onOpen={() => setBillId(it.id)} />)}
             </Rows>
           )}
         </section>
@@ -271,7 +281,8 @@ export default function Tasks() {
       <TemplatesSection />
 
       <TaskSheet task={open} onClose={() => setOpenId(null)} />
-      <BillSheet occ={bill} onClose={() => setBillId(null)} />
+      {/* key: стан «спитати суму» належить одному платежу, а не листу взагалі */}
+      <BillSheet key={billId ?? 'none'} occ={bill} onClose={() => setBillId(null)} />
     </div>
   )
 }
@@ -367,11 +378,12 @@ function ShopRow({ item, pinned, onTogglePin }: {
             {item.count} {plural(item.count, 'товар', 'товари', 'товарів')}
           </span>}
 
+      {/* на телефоні наведення немає — тож кнопка видима завжди, лише приглушена */}
       <button onClick={onTogglePin}
         aria-label={pinned ? 'Відкріпити' : 'Закріпити зверху'}
         title={pinned ? 'Відкріпити' : 'Закріпити зверху'}
         className={`shrink-0 p-1 -mr-1 rounded transition-colors ${
-          pinned ? 'text-accent' : 'text-faint opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}`}>
+          pinned ? 'text-accent' : 'text-faint opacity-60 hover:opacity-100 focus-visible:opacity-100'}`}>
         {Icon.pin(15)}
       </button>
     </li>
@@ -396,14 +408,16 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
 
   return (
     <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11 group">
-      <button onClick={() => completeTask(task.id)} aria-label="Виконано"
+      <button onClick={() => completeTask(task.id)}
+        aria-label={isDone ? `Повернути в роботу: ${task.title}` : `Виконано: ${task.title}`}
         className={`shrink-0 h-[18px] w-[18px] rounded-[5px] border grid place-items-center transition-colors ${
           isDone ? 'bg-accent border-accent text-white' : 'border-line2 hover:border-accent'}`}>
         {isDone && Icon.check(12)}
       </button>
 
       <button onClick={cyclePriority} className="shrink-0 opacity-90 hover:opacity-100"
-        title={priorityLabel(task.priority)}>
+        title={priorityLabel(task.priority)}
+        aria-label={`Пріоритет: ${priorityLabel(task.priority)}. Змінити`}>
         <PriorityMark p={task.priority} />
       </button>
 
@@ -424,63 +438,16 @@ function TaskRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   )
 }
 
-/**
- * Платіж у списку задач. Об'єкта Task для нього не існує — рядок зібраний
- * з Occurrence просто зараз. Чекбокс викликає confirmOccurrence: воно саме
- * створить витрату і, якщо план прив'язаний до фонду, списання з фонду.
- */
-function BillRow({ occ, onOpen }: { occ: Occurrence; onOpen: () => void }) {
-  const db = useDB()
-  const member = db.members.find(m => m.id === occ.assigneeId)
-  const paid = occ.status === 'paid'
-  const skipped = occ.status === 'skipped'
-  const settled = paid || skipped
-  const due = relativeDue(occ.dueDate)
-
-  return (
-    <li className="flex items-center gap-2.5 px-4 sm:px-6 h-11 group">
-      {settled ? (
-        <span className={`shrink-0 h-[18px] w-[18px] rounded-[5px] border grid place-items-center ${
-          paid ? 'bg-accent border-accent text-white' : 'border-line2 text-faint'}`}>
-          {paid ? Icon.check(12) : '—'}
-        </span>
-      ) : (
-        <button onClick={() => confirmOccurrence(occ.id)}
-          aria-label={isIncomeOccurrence(db, occ) ? 'Отримано' : 'Оплачено'}
-          className="shrink-0 h-[18px] w-[18px] rounded-[5px] border border-line2 hover:border-accent grid place-items-center transition-colors" />
-      )}
-
-      <span className="shrink-0 text-faint" title="Платіж">{Icon.wallet(15)}</span>
-
-      <button onClick={onOpen} className="flex-1 min-w-0 text-left">
-        <span className={`text-[14px] block truncate ${settled ? 'line-through text-faint' : ''}`}>{occ.name}</span>
-      </button>
-
-      <span className="shrink-0 hidden sm:block">
-        <Badge tone={due.tone === 'over' && !settled ? 'warn' : 'neutral'}>Платіж</Badge>
-      </span>
-
-      <span className={`shrink-0 text-[13.5px] num ${settled ? 'text-faint' : 'text-muted'}`}>
-        {money(settled ? occ.actualMinor ?? occ.expectedMinor : occ.expectedMinor, occ.currency)}
-      </span>
-
-      <span className={`shrink-0 text-[12px] num ${
-        settled ? 'text-faint'
-          : due.tone === 'over' ? 'text-warn font-medium'
-          : due.tone === 'today' ? 'text-warn' : 'text-faint'}`}>
-        {settled ? shortDate(occ.paidOn ?? occ.dueDate) : due.label}
-      </span>
-
-      <span className="shrink-0"><Avatar member={member} /></span>
-    </li>
-  )
-}
-
 /* ───────────────────────── листи ───────────────────────── */
 
+/**
+ * Лист платежу з «Задач»: звʼязки, яких компактний рядок не показує, і ті самі
+ * дії, що в рядку (`payBill`) — щоб оплата звідси не відрізнялась від чекліста.
+ */
 function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => void }) {
   const db = useDB()
   const nav = useNavigate()
+  const [askAmount, setAskAmount] = useState(false)
   if (!occ) return null
   const envelope = db.envelopes.find(e => e.id === occ.envelopeId)
   const fund = occ.fundId ? db.funds.find(f => f.id === occ.fundId) : undefined
@@ -518,16 +485,22 @@ function BillSheet({ occ, onClose }: { occ: Occurrence | null; onClose: () => vo
 
       {settled ? (
         <div className="text-[13px] text-faint">
-          Змінити суму або скасувати підтвердження — у чеклісті місяця.
+          Скасувати підтвердження — квадратом у рядку. Весь місяць — у чеклісті.
           <div className="mt-2">
-            <Btn onClick={() => nav('/bills')}>Відкрити чекліст</Btn>
+            {/* чекліст того місяця, де платіж, а не поточного */}
+            <Btn onClick={() => nav(occ.dueDate.slice(0, 7) === thisMonth() ? '/bills' : `/bills?m=${occ.dueDate.slice(0, 7)}`)}>
+              Відкрити чекліст
+            </Btn>
           </div>
         </div>
+      ) : askAmount ? (
+        // суми в платежу немає — питаємо її тут же, а не мовчки пишемо 0
+        <AmountForm o={occ} onDone={() => { setAskAmount(false); onClose() }} />
       ) : (
         <>
           <div className="flex gap-2">
-            <Btn variant="primary" full onClick={() => { confirmOccurrence(occ.id); onClose() }}>
-              {isIncomeOccurrence(db, occ) ? 'Отримано' : 'Оплачено'}
+            <Btn variant="primary" full onClick={() => { if (payBill(db, occ)) onClose(); else setAskAmount(true) }}>
+              {doneLabel(db, occ)}
             </Btn>
             <Btn onClick={() => { skipOccurrence(occ.id); onClose() }}>Пропустити</Btn>
           </div>

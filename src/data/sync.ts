@@ -4,21 +4,60 @@ import type { DB, Member, Rates } from './types'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+type Row = Record<string, unknown>
+
 const idOf = (e: (typeof ENTITIES)[number], x: any): string =>
   e.idOf ? e.idOf(x) : (x.id as string)
 
-/** Тягне все, що належить дому. Порядок не важливий — читання. */
+/**
+ * Відмова бази відрізняється від збою мережі.
+ *
+ * Мережа впала — зміна чекає й поїде пізніше. База відхилила (обмеження,
+ * RLS, кривий uuid) — повтор нічого не дасть, і якщо лишити таку зміну
+ * в голові черги, за нею назавжди застрягне все інше. Тому постійні
+ * помилки черга викидає, а стан підтягує з бази.
+ */
+export class SyncError extends Error {
+  constructor(message: string, readonly permanent: boolean) { super(message) }
+}
+
+function fail(where: string, error: { message: string; code?: string }): SyncError {
+  const code = error.code ?? ''
+  // без коду — fetch не дійшов; 08/53/57 — зʼєднання, ресурси, таймаут;
+  // PGRST3xx — прострочений токен, який сесія оновить сама
+  const transient = !code || /^(08|53|57|PGRST3)/.test(code)
+  return new SyncError(`${where}: ${error.message}`, !transient)
+}
+
+const PAGE = 1000
+
+/**
+ * Тягне все, що належить дому.
+ *
+ * Сторінками: Supabase віддає не більше 1000 рядків за запит і мовчить,
+ * що обрізав. Без пагінації через кілька місяців записів баланси фондів
+ * і факт по конвертах тихо брехали б, а materialize «догенеровував» би
+ * платежі, яких просто не побачив, і затирав ними оплачені.
+ */
 export async function pullAll(householdId: string): Promise<Partial<DB>> {
   const db = cloud()
   const out: Record<string, unknown[]> = {}
 
   await Promise.all(ENTITIES.map(async e => {
-    const { data, error } = await db
-      .from(e.table).select(e.columns)
-      .eq('household_id', householdId)
-      .is('deleted_at', null)          // поховані не повертаємо
-    if (error) throw new Error(`${e.table}: ${error.message}`)
-    out[e.key] = (data ?? []).map(r => e.fromRow(r as any))
+    const rows: unknown[] = []
+    // стабільний порядок, інакше сторінки перекриваються й губляться рядки
+    const order = e.onConflict ? e.onConflict.split(',') : ['id']
+    for (let from = 0; ; from += PAGE) {
+      let q = db.from(e.table).select(e.columns)
+        .eq('household_id', householdId)
+        .is('deleted_at', null)          // поховані не повертаємо
+      for (const col of order) q = q.order(col)
+      const { data, error } = await q.range(from, from + PAGE - 1)
+      if (error) throw fail(e.table, error)
+      rows.push(...(data ?? []).map(r => e.fromRow(r as any)))
+      if (!data || data.length < PAGE) break
+    }
+    out[e.key] = rows
   }))
 
   return out as Partial<DB>
@@ -31,6 +70,10 @@ export async function pullAll(householdId: string): Promise<Partial<DB>> {
  * під сорок, і кожну довелось би не забути. Знімок ловить усе, включно
  * з тим, що materialize() дописав сам.
  *
+ * Змінений рядок їде ЛИШЕ зміненими колонками. Повний upsert із пристрою,
+ * який пропустив зміни партнера, перезаписав би їх: я поміняв нотатку —
+ * і оплата, яку партнер щойно поставив, повернулась у «до оплати».
+ *
  * Порядок ENTITIES важливий — батьки перед дітьми, інакше зовнішні ключі.
  */
 export async function pushDiff(before: DB, after: DB, householdId: string): Promise<void> {
@@ -40,15 +83,52 @@ export async function pushDiff(before: DB, after: DB, householdId: string): Prom
     const prev = new Map((before[e.key] as any[] ?? []).map(x => [idOf(e, x), x]))
     const next = new Map((after[e.key] as any[] ?? []).map(x => [idOf(e, x), x]))
 
-    const upserts: any[] = []
+    const inserts: Row[] = []
+    const updates: { id: string; full: Row; patch: Row }[] = []
+
     for (const [k, v] of next) {
       const old = prev.get(k)
-      if (!old || JSON.stringify(old) !== JSON.stringify(v)) upserts.push(e.toRow(v, householdId))
+      if (old && JSON.stringify(old) === JSON.stringify(v)) continue
+      const row = e.toRow(v, householdId)
+      if (!old) {
+        // Новий для цього пристрою рядок — живий. deleted_at: null повертає
+        // рядок, який колись поховали з тим самим id: внески фонду після
+        // «вимкнути-увімкнути нагадування» генеруються з тими самими stableId.
+        inserts.push(e.onConflict ? row : { ...row, deleted_at: null })
+        continue
+      }
+      const was = e.toRow(old, householdId)
+      const patch: Row = {}
+      for (const col of Object.keys(row)) {
+        if (JSON.stringify(row[col]) !== JSON.stringify(was[col])) patch[col] = row[col]
+      }
+      // «Заплановано» → «до оплати» — лише наслідок календаря, materialize
+      // робить це на кожному пристрої сам. Відправляти не треба: так застарілий
+      // пристрій не поверне в «до оплати» платіж, який партнер уже оплатив.
+      if (patch.status === 'due' && was.status === 'projected') delete patch.status
+      if (Object.keys(patch).length) updates.push({ id: k, full: row, patch })
     }
-    if (upserts.length) {
+
+    if (inserts.length) {
       const { error } = await db.from(e.table)
-        .upsert(upserts, e.onConflict ? { onConflict: e.onConflict } : undefined)
-      if (error) throw new Error(`${e.table} upsert: ${error.message}`)
+        .upsert(inserts, e.onConflict ? { onConflict: e.onConflict } : undefined)
+      if (error) throw fail(`${e.table} insert`, error)
+    }
+
+    for (const u of updates) {
+      if (e.onConflict) {
+        // складений ключ і три колонки — повний рядок тут і є патч
+        const { error } = await db.from(e.table).upsert(u.full, { onConflict: e.onConflict })
+        if (error) throw fail(`${e.table} upsert`, error)
+        continue
+      }
+      const { data, error } = await db.from(e.table).update(u.patch).eq('id', u.id).select('id')
+      if (error) throw fail(`${e.table} update`, error)
+      // рядка в базі немає (не доїхав колись раніше) — тоді вставляємо повністю
+      if (!data?.length) {
+        const { error: err2 } = await db.from(e.table).upsert({ ...u.full, deleted_at: null })
+        if (err2) throw fail(`${e.table} upsert`, err2)
+      }
     }
 
     // Складений ключ — видалення там не буває: setPlanned лише вставляє й оновлює
@@ -62,7 +142,7 @@ export async function pushDiff(before: DB, after: DB, householdId: string): Prom
       const { error } = await db.from(e.table)
         .update({ deleted_at: new Date().toISOString() })
         .in('id', gone)
-      if (error) throw new Error(`${e.table} delete: ${error.message}`)
+      if (error) throw fail(`${e.table} delete`, error)
     }
   }
 }
@@ -98,7 +178,7 @@ export async function pushRates(before: Rates, after: Rates): Promise<void> {
 
   const { error } = await cloud()
     .from('fx_rates').upsert(rows, { onConflict: 'base_ccy,quote_ccy,rate_date' })
-  if (error) throw new Error(`fx_rates: ${error.message}`)
+  if (error) throw fail('fx_rates', error)
 }
 
 /* ───────────────────────── учасники ───────────────────────── */
@@ -122,12 +202,12 @@ export async function pushMembers(
       const { error } = await db.from('household_members')
         .update({ color: m.color })
         .eq('household_id', householdId).eq('profile_id', m.id)
-      if (error) throw new Error(`household_members: ${error.message}`)
+      if (error) throw fail('household_members', error)
     }
     if (m.id === meId && old && old.name !== m.name) {
       const { error } = await db.from('profiles')
         .update({ display_name: m.name }).eq('id', meId)
-      if (error) throw new Error(`profiles: ${error.message}`)
+      if (error) throw fail('profiles', error)
     }
   }
 }
